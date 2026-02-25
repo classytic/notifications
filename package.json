@@ -1,30 +1,58 @@
 {
   "name": "@classytic/notifications",
-  "version": "0.0.1",
-  "description": "Multi-channel notification system for event-driven applications. Framework-agnostic with pluggable channels.",
+  "version": "1.2.0",
+  "description": "Multi-channel notification system with pluggable providers, templates, and retry - zero required dependencies",
   "type": "module",
-  "main": "./src/index.js",
-  "types": "./notifications.d.ts",
+  "sideEffects": false,
+  "main": "./dist/index.mjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./channels": {
+      "types": "./dist/channels/index.d.mts",
+      "default": "./dist/channels/index.mjs"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.mts",
+      "default": "./dist/utils/index.mjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "keywords": [
     "notifications",
     "multi-channel",
     "email",
-    "push",
     "sms",
-    "in-app",
+    "push",
+    "webhook",
+    "nodemailer",
+    "smtp",
+    "ses",
+    "gmail",
     "event-driven",
-    "hooks",
-    "alerts",
-    "messaging",
-    "dispatcher",
-    "channels",
+    "templates",
+    "retry",
     "pluggable",
     "framework-agnostic",
     "express",
     "fastify",
-    "nestjs"
+    "nestjs",
+    "typescript",
+    "zero-dependencies"
   ],
-  "author": "Classytic",
+  "author": "Classytic <classytic.dev@gmail.com> (https://github.com/classytic)",
+  "contributors": [
+    "Sadman Chowdhury (https://github.com/siam923)"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -34,49 +62,39 @@
     "url": "https://github.com/classytic/notifications/issues"
   },
   "homepage": "https://github.com/classytic/notifications#readme",
-  "scripts": {
-    "test": "node --test tests/*.test.js",
-    "test:watch": "node --test --watch tests/*.test.js",
-    "prepublishOnly": "npm test && npm pack --dry-run",
-    "version:patch": "npm version patch",
-    "version:minor": "npm version minor",
-    "version:major": "npm version major",
-    "publish:npm": "npm publish",
-    "release:patch": "npm run version:patch && npm run publish:npm",
-    "release:minor": "npm run version:minor && npm run publish:npm",
-    "release:major": "npm run version:major && npm run publish:npm"
+  "peerDependencies": {
+    "nodemailer": "^6.0.0 || ^7.0.0 || ^8.0.0"
   },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "exports": {
-    ".": {
-      "types": "./notifications.d.ts",
-      "import": "./src/index.js"
-    },
-    "./core/channel": {
-      "import": "./src/core/channel.js"
-    },
-    "./core/dispatcher": {
-      "import": "./src/core/dispatcher.js"
-    },
-    "./core/factory": {
-      "import": "./src/core/factory.js"
-    },
-    "./utils/merge-hooks": {
-      "import": "./src/utils/merge-hooks.js"
+  "peerDependenciesMeta": {
+    "nodemailer": {
+      "optional": true
     }
   },
-  "files": [
-    "src/**/*.js",
-    "!src/**/*.test.js",
-    "!src/**/*.spec.js",
-    "!src/**/__tests__/**",
-    "notifications.d.ts",
-    "README.md",
-    "LICENSE"
-  ],
-  "peerDependencies": {},
-  "dependencies": {}
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run typecheck",
+    "publish:dry": "npm publish --dry-run --access public",
+    "publish:npm": "npm publish --access public",
+    "release": "npm run build && npm run typecheck && npm publish --access public",
+    "release:patch": "npm version patch && npm run release",
+    "release:minor": "npm version minor && npm run release",
+    "release:major": "npm version major && npm run release"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/nodemailer": "^6.4.17",
+    "@vitest/coverage-v8": "3.2.4",
+    "nodemailer": "^6.10.1",
+    "tsdown": "0.20.3",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
 }
-
