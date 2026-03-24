@@ -8,7 +8,10 @@ export default defineConfig({
   ],
   format: 'esm',
   dts: true,
+  clean: true,
   sourcemap: false,
   minify: false,
-  external: ['nodemailer'],
+  // No manual `external` needed — tsdown auto-externalizes
+  // all peerDependencies (nodemailer, twilio, firebase-admin, handlebars)
+  // and node: builtins from package.json automatically.
 });

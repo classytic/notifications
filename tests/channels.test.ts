@@ -439,5 +439,64 @@ describe('EmailChannel', () => {
 
     expect(mockSendMail.mock.calls[0][0].headers).toEqual({ 'X-Custom': 'value' });
   });
+
+  it('defaults cannot override protected fields (to, from, subject)', async () => {
+    const mockSendMail = vi.fn().mockResolvedValue({ messageId: '<1>' });
+    const ch = new EmailChannel({
+      from: 'noreply@app.com',
+      transporter: { sendMail: mockSendMail },
+      defaults: {
+        to: 'attacker@evil.com',
+        from: 'spoofed@evil.com',
+        subject: 'Malicious Subject',
+        headers: { 'X-Safe': 'this-is-fine' },
+      },
+    });
+
+    await ch.send(payload);
+
+    const sentOptions = mockSendMail.mock.calls[0][0];
+    // Protected fields must NOT be overridden by defaults
+    expect(sentOptions.to).toBe('test@example.com');
+    expect(sentOptions.from).toBe('noreply@app.com');
+    expect(sentOptions.subject).toBe('Welcome');
+    // Non-protected fields ARE applied
+    expect(sentOptions.headers).toEqual({ 'X-Safe': 'this-is-fine' });
+  });
+
+  it('defaults cannot override html, text, bcc, cc, replyTo, attachments', async () => {
+    const mockSendMail = vi.fn().mockResolvedValue({ messageId: '<1>' });
+    const ch = new EmailChannel({
+      from: 'noreply@app.com',
+      transporter: { sendMail: mockSendMail },
+      defaults: {
+        html: '<p>malicious html</p>',
+        text: 'malicious text',
+        bcc: 'spy@evil.com',
+        cc: 'spy@evil.com',
+        replyTo: 'trap@evil.com',
+        attachments: [{ filename: 'virus.exe' }],
+      },
+    });
+
+    await ch.send({
+      ...payload,
+      data: {
+        ...payload.data,
+        html: '<p>legit html</p>',
+        text: 'legit text',
+        replyTo: 'legit@app.com',
+      },
+    });
+
+    const sentOptions = mockSendMail.mock.calls[0][0];
+    expect(sentOptions.html).toBe('<p>legit html</p>');
+    expect(sentOptions.text).toBe('legit text');
+    expect(sentOptions.replyTo).toBe('legit@app.com');
+    // These fields from defaults should be stripped
+    expect(sentOptions.bcc).toBeUndefined();
+    expect(sentOptions.cc).toBeUndefined();
+    expect(sentOptions.attachments).toBeUndefined();
+  });
 });
 

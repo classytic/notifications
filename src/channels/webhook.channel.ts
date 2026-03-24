@@ -26,6 +26,7 @@
  * ```
  */
 
+import { createHmac } from 'node:crypto';
 import { BaseChannel } from './BaseChannel.js';
 import { ChannelError } from '../utils/errors.js';
 import type { WebhookChannelConfig, NotificationPayload, SendResult } from '../types.js';
@@ -51,9 +52,7 @@ export class WebhookChannel extends BaseChannel<WebhookChannelConfig> {
 
     // HMAC-SHA256 signature
     if (this.config.secret) {
-      const crypto = await import('node:crypto');
-      const signature = crypto
-        .createHmac('sha256', this.config.secret)
+      const signature = createHmac('sha256', this.config.secret)
         .update(body)
         .digest('hex');
       headers['X-Signature-256'] = `sha256=${signature}`;

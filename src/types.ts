@@ -36,6 +36,8 @@ export interface NotificationPayload {
   metadata?: Record<string, unknown>;
   /** Idempotency key — duplicate sends with the same key are skipped */
   idempotencyKey?: string;
+  /** Delay delivery by this many milliseconds (requires queue adapter) */
+  delay?: number;
 }
 
 /** Result from a single channel send */
@@ -55,6 +57,8 @@ export interface DispatchResult {
   failed: number;
   skipped: number;
   duration: number;
+  /** True when the notification was enqueued (not yet processed) */
+  queued?: boolean;
 }
 
 // ============================================================================
@@ -71,6 +75,8 @@ export interface ChannelConfig {
   events?: string[];
   /** Per-channel retry override */
   retry?: RetryConfig;
+  /** Per-channel rate limiting (e.g., Gmail 500/day) */
+  rateLimit?: import('./utils/rate-limiter.js').RateLimitConfig;
 }
 
 /** Channel interface - implement this for custom channels */
@@ -141,6 +147,44 @@ export interface WebhookChannelConfig extends ChannelConfig {
   method?: 'POST' | 'PUT';
   /** Request timeout in ms (default: 10000) */
   timeout?: number;
+}
+
+// ============================================================================
+// SMS Channel Types
+// ============================================================================
+
+/** SMS provider interface (Twilio or custom) */
+export interface SmsProvider {
+  send(message: { to: string; from: string; body: string }): Promise<{ sid: string }>;
+}
+
+/** SmsChannel configuration — bring your own SMS SDK */
+export interface SmsChannelConfig extends ChannelConfig {
+  /** Sender phone number or sender ID (E.164 format: +15551234567) */
+  from: string;
+  /** SMS provider implementation (Twilio, SNS, Vonage, etc.) */
+  provider: SmsProvider;
+}
+
+// ============================================================================
+// Push Notification Channel Types
+// ============================================================================
+
+/** Push notification provider interface (FCM or custom) */
+export interface PushProvider {
+  send(message: {
+    token: string;
+    title: string;
+    body: string;
+    data?: Record<string, string>;
+    imageUrl?: string;
+  }): Promise<{ messageId: string }>;
+}
+
+/** PushChannel configuration — bring your own push SDK */
+export interface PushChannelConfig extends ChannelConfig {
+  /** Push provider implementation (FCM, Expo, OneSignal, APNs, etc.) */
+  provider: PushProvider;
 }
 
 // ============================================================================
@@ -250,6 +294,12 @@ export interface NotificationServiceConfig {
     /** TTL in milliseconds (default: 86400000 = 24h) */
     ttl?: number;
   };
+  /** Delivery log for audit trail — records every send attempt */
+  deliveryLog?: import('./utils/delivery-log.js').DeliveryLog;
+  /** Rate limit store (default: MemoryRateLimitStore when channels use rateLimit) */
+  rateLimitStore?: import('./utils/rate-limiter.js').RateLimitStore;
+  /** Queue adapter for crash-resilient delivery. Service owns the queue. */
+  queue?: import('./utils/queue.js').QueueAdapter;
 }
 
 /** Service lifecycle events */
@@ -258,7 +308,9 @@ export type ServiceEvent =
   | 'after:send'
   | 'send:success'
   | 'send:failed'
-  | 'send:retry';
+  | 'send:retry'
+  | 'send:rate_limited'
+  | 'send:queued';
 
 /** Event handler function */
 export type EventHandler<T = unknown> = (data: T) => void | Promise<void>;

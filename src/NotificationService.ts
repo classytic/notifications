@@ -6,14 +6,21 @@
  * Routes notifications to channels, resolves templates,
  * applies user preferences, retries on failure, and emits lifecycle events.
  *
+ * v2 additions: rate limiting, delivery log, queue adapter, BCC batching.
+ *
  * @example
  * ```typescript
  * import { NotificationService } from '@classytic/notifications';
  * import { EmailChannel, ConsoleChannel } from '@classytic/notifications/channels';
+ * import { MemoryDeliveryLog } from '@classytic/notifications/utils';
  *
  * const notifications = new NotificationService({
  *   channels: [
- *     new EmailChannel({ from: 'noreply@app.com', transport: { service: 'gmail', auth: { user, pass } } }),
+ *     new EmailChannel({
+ *       from: 'noreply@app.com',
+ *       transport: { service: 'gmail', auth: { user, pass } },
+ *       rateLimit: { maxPerWindow: 500, windowMs: 86_400_000 }, // Gmail 500/day
+ *     }),
  *     new ConsoleChannel(),
  *   ],
  *   templates: async (id, data) => {
@@ -21,6 +28,7 @@
  *     return templates[id] ?? { subject: id, text: JSON.stringify(data) };
  *   },
  *   retry: { maxAttempts: 3, backoff: 'exponential' },
+ *   deliveryLog: new MemoryDeliveryLog(),
  * });
  *
  * // Send a notification
@@ -43,8 +51,12 @@ import { withRetry, resolveRetryConfig } from './utils/retry.js';
 import { NotificationError } from './utils/errors.js';
 import { isQuietHours } from './utils/quiet-hours.js';
 import { MemoryIdempotencyStore, IDEMPOTENCY_DEFAULT_TTL } from './utils/idempotency.js';
+import { MemoryRateLimitStore } from './utils/rate-limiter.js';
 import { pMap } from './utils/concurrency.js';
 import type { IdempotencyStore } from './utils/idempotency.js';
+import type { RateLimitConfig, RateLimitStore } from './utils/rate-limiter.js';
+import type { DeliveryLog } from './utils/delivery-log.js';
+import type { QueueAdapter } from './utils/queue.js';
 import type {
   Channel,
   NotificationPayload,
@@ -82,6 +94,9 @@ export class NotificationService {
   private emitter = new Emitter();
   private idempotencyStore?: IdempotencyStore;
   private idempotencyTtl: number;
+  private deliveryLog?: DeliveryLog;
+  private rateLimitStore?: RateLimitStore;
+  private queueAdapter?: QueueAdapter;
 
   constructor(config: NotificationServiceConfig = {}) {
     this.channels = config.channels ?? [];
@@ -97,6 +112,24 @@ export class NotificationService {
     } else {
       this.idempotencyTtl = IDEMPOTENCY_DEFAULT_TTL;
     }
+
+    // Delivery log
+    this.deliveryLog = config.deliveryLog;
+
+    // Rate limiting: use provided store, or auto-create if any channel has rateLimit
+    if (config.rateLimitStore) {
+      this.rateLimitStore = config.rateLimitStore;
+    } else if (this.channels.some(ch => this.getChannelRateLimit(ch))) {
+      this.rateLimitStore = new MemoryRateLimitStore();
+    }
+
+    // Queue adapter — service owns the queue, wires up processing immediately
+    if (config.queue) {
+      this.queueAdapter = config.queue;
+      this.queueAdapter.process(async (payload) => {
+        await this.sendDirect(payload);
+      });
+    }
   }
 
   // ===========================================================================
@@ -106,6 +139,10 @@ export class NotificationService {
   /** Add a channel at runtime */
   addChannel(channel: Channel): this {
     this.channels.push(channel);
+    // Auto-create rate limit store if the new channel has rate limiting
+    if (!this.rateLimitStore && this.getChannelRateLimit(channel)) {
+      this.rateLimitStore = new MemoryRateLimitStore();
+    }
     return this;
   }
 
@@ -125,29 +162,72 @@ export class NotificationService {
     return this.channels.map(c => c.name);
   }
 
+  /** Get the delivery log instance (for querying history) */
+  getDeliveryLog(): DeliveryLog | undefined {
+    return this.deliveryLog;
+  }
+
   // ===========================================================================
   // Core Send
   // ===========================================================================
 
   /**
-   * Send a notification to all matching channels
+   * Send a notification to all matching channels.
+   *
+   * When a queue adapter is configured, notifications are enqueued
+   * for crash-resilient delivery instead of sending immediately.
    *
    * Flow:
    * 1. Emit `before:send` (awaited — listeners can block or throw to abort)
-   * 2. Resolve template (if provided)
-   * 3. Filter channels by event + target list
-   * 4. Apply user preference filtering
-   * 5. Send to all channels in parallel (with retry)
-   * 6. Emit `after:send` / `send:success` / `send:failed` (awaited — listeners run sequentially)
-   *
-   * **Lifecycle contract:**
-   * - `before:send` is awaited and **fail-fast** — a throwing listener aborts the send and
-   *   propagates the error to the caller. Use this for validation or rate limiting.
-   * - `after:send`, `send:success`, `send:failed` are awaited but **safe** — listener errors
-   *   are caught and logged, never masking the dispatch result.
-   * - `send:retry` is emitted inside the retry callback — listener errors are caught + logged.
+   * 2. If queue is configured, enqueue and return early
+   * 3. Resolve template (if provided)
+   * 4. Filter channels by event + target list
+   * 5. Apply user preference filtering
+   * 6. Check per-channel rate limits
+   * 7. Send to all channels in parallel (with retry)
+   * 8. Record to delivery log
+   * 9. Emit `after:send` / `send:success` / `send:failed`
    */
   async send(payload: NotificationPayload): Promise<DispatchResult> {
+    // If a queue is configured (or payload has delay), enqueue instead of sending directly
+    if (this.queueAdapter) {
+      const enqueueOptions = payload.delay ? { delay: payload.delay } : undefined;
+      const jobId = await this.queueAdapter.enqueue(payload, enqueueOptions);
+      this.logger.debug?.(`Notification queued (job: ${jobId}${payload.delay ? `, delay: ${payload.delay}ms` : ''})`);
+
+      try {
+        await this.emitter.emit('send:queued', { jobId, payload });
+      } catch {
+        // safe — don't let listener errors affect the queue result
+      }
+
+      return {
+        event: payload.event,
+        results: [],
+        sent: 0,
+        failed: 0,
+        skipped: 0,
+        duration: 0,
+        queued: true,
+      };
+    }
+
+    // Delay without a queue: warn and send immediately
+    if (payload.delay) {
+      this.logger.warn('payload.delay requires a queue adapter — sending immediately');
+    }
+
+    return this.sendDirect(payload);
+  }
+
+  /**
+   * Internal send pipeline (used by both direct sends and queue processor).
+   *
+   * Every code path — including skips for idempotency, quiet hours, and
+   * preferences — flows through finalize() so delivery logging and
+   * lifecycle events are always emitted.
+   */
+  private async sendDirect(payload: NotificationPayload): Promise<DispatchResult> {
     const start = Date.now();
 
     // 1. Lifecycle: before
@@ -158,14 +238,14 @@ export class NotificationService {
       const seen = await this.idempotencyStore.has(payload.idempotencyKey);
       if (seen) {
         this.logger.debug?.(`Duplicate notification skipped (key: ${payload.idempotencyKey})`);
-        return {
+        return this.finalize(payload, {
           event: payload.event,
           results: [],
           sent: 0,
           failed: 0,
           skipped: 1,
           duration: Date.now() - start,
-        };
+        });
       }
     }
 
@@ -203,35 +283,33 @@ export class NotificationService {
           enrichedPayload.event,
         );
         if (prefs) {
-          // Quiet hours — skip all channels if currently in quiet period
           if (prefs.quiet && isQuietHours(prefs.quiet)) {
             this.logger.debug?.(`Notification skipped: quiet hours active for ${enrichedPayload.recipient.id}`);
-            return {
+            return this.finalize(payload, {
               event: enrichedPayload.event,
               results: [],
               sent: 0,
               failed: 0,
               skipped: activeChannels.length,
               duration: Date.now() - start,
-            };
+            });
           }
 
-          // Channel-level preferences
           if (prefs.channels) {
             activeChannels = activeChannels.filter(
               ch => prefs.channels![ch.name] !== false,
             );
           }
-          // Event-level opt-out
+
           if (prefs.events?.[enrichedPayload.event] === false) {
-            return {
+            return this.finalize(payload, {
               event: enrichedPayload.event,
               results: [],
               sent: 0,
               failed: 0,
               skipped: activeChannels.length,
               duration: Date.now() - start,
-            };
+            });
           }
         }
       } catch (err) {
@@ -240,19 +318,17 @@ export class NotificationService {
     }
 
     if (!activeChannels.length) {
-      return {
+      return this.finalize(payload, {
         event: enrichedPayload.event,
         results: [],
         sent: 0,
         failed: 0,
         skipped: 0,
         duration: Date.now() - start,
-      };
+      });
     }
 
-    // 5. Send to all channels in parallel
-    // sendToChannel() catches all errors internally and returns a failed SendResult,
-    // so Promise.all is safe here (no rejections possible).
+    // 5. Send to all channels in parallel (with rate limit check)
     const results: SendResult[] = await Promise.all(
       activeChannels.map(channel => this.sendToChannel(channel, enrichedPayload)),
     );
@@ -275,7 +351,28 @@ export class NotificationService {
       }
     }
 
-    // Lifecycle: after (errors logged, never mask the dispatch result)
+    return this.finalize(payload, dispatch);
+  }
+
+  /**
+   * Single exit path for all send outcomes.
+   * Records to delivery log and emits lifecycle events regardless of
+   * whether the notification was sent, skipped, or failed.
+   */
+  private async finalize(
+    payload: NotificationPayload,
+    dispatch: DispatchResult,
+  ): Promise<DispatchResult> {
+    // Record to delivery log (all outcomes — sent, skipped, failed)
+    if (this.deliveryLog) {
+      try {
+        await this.deliveryLog.record(payload, dispatch);
+      } catch (err) {
+        this.logger.warn(`Delivery log error: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // Lifecycle events (errors logged, never mask the dispatch result)
     try {
       await this.emitter.emit('after:send', dispatch);
 
@@ -294,16 +391,34 @@ export class NotificationService {
     return dispatch;
   }
 
-  /** Send to a single channel with retry */
+  /** Send to a single channel with rate limiting and retry */
   private async sendToChannel(
     channel: Channel,
     payload: NotificationPayload,
   ): Promise<SendResult> {
+    // Rate limit check
+    const rateLimit = this.getChannelRateLimit(channel);
+    if (rateLimit && this.rateLimitStore) {
+      const allowed = await this.rateLimitStore.consume(channel.name, rateLimit);
+      if (!allowed) {
+        this.logger.warn(`[${channel.name}] Rate limited — skipping`);
+        this.emitter.emit('send:rate_limited', {
+          channel: channel.name,
+          event: payload.event,
+        }).catch(err => {
+          this.logger.error(`[${channel.name}] send:rate_limited listener error: ${err instanceof Error ? err.message : err}`);
+        });
+        return {
+          status: 'skipped',
+          channel: channel.name,
+          error: 'Rate limited',
+        };
+      }
+    }
+
     const channelRetryRaw = (channel as { config?: { retry?: RetryConfig } }).config?.retry;
 
     // Use channel-specific retry if explicitly configured, otherwise global.
-    // This allows channels to set maxAttempts: 1 to disable retry even when
-    // global retry is configured with higher attempts.
     const retryConfig = channelRetryRaw
       ? resolveRetryConfig(channelRetryRaw)
       : this.retryConfig;
@@ -318,7 +433,6 @@ export class NotificationService {
           this.logger.warn(
             `[${channel.name}] Retry ${attempt}/${retryConfig.maxAttempts}: ${error.message}`,
           );
-          // Catch to prevent unhandled rejection from listener errors
           this.emitter.emit('send:retry', {
             channel: channel.name,
             attempt,
@@ -340,6 +454,11 @@ export class NotificationService {
         duration: Date.now() - start,
       };
     }
+  }
+
+  /** Extract rate limit config from a channel */
+  private getChannelRateLimit(channel: Channel): RateLimitConfig | undefined {
+    return (channel as { config?: { rateLimit?: RateLimitConfig } }).config?.rateLimit;
   }
 
   // ===========================================================================

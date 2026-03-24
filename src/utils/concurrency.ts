@@ -49,6 +49,10 @@ export async function pMap<T, R>(
 ): Promise<R[]> {
   const { concurrency = 10 } = options;
 
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError(`pMap: concurrency must be a positive integer, got ${concurrency}`);
+  }
+
   if (items.length === 0) return [];
 
   const results: R[] = new Array(items.length);

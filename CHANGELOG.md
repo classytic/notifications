@@ -2,6 +2,39 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.0.0] - 2026-03-24
+
+### Added
+
+- `SmsChannel` and `PushChannel` with bring-your-own-provider integrations
+- Rate limiting, delivery logging, and queue-backed delivery
+- Built-in template resolver via `createSimpleResolver()`
+- Channel fallback with `withFallback()`
+- Delayed delivery via `payload.delay`
+- Status webhook helper via `createStatusHandler()`
+- Provider adapter examples and observability notes
+- `DispatchResult.queued` plus `send:rate_limited` and `send:queued` events
+
+### Changed
+
+- Skipped notifications now go through delivery logging and lifecycle events
+- `EmailChannel` now protects critical mail fields from being overridden by defaults
+- `pMap()` now validates invalid concurrency values
+- `MemoryQueue.drain()` now cancels delayed jobs correctly
+- `WebhookChannel` now uses a static `node:crypto` import
+- Queue processing is owned by the service when a queue adapter is attached
+- `withFallback()` now works correctly with queued delivery
+- Bumped `tsdown` to v0.21.4
+
+### Removed
+
+- `batchBcc` from `EmailChannelConfig`
+- `priority` from `QueueEnqueueOptions`
+
+### Dependencies
+
+- `nodemailer >=6` remains the only optional peer dependency
+
 ## [1.1.0] - 2026-02-24
 
 ### Added

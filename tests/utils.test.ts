@@ -552,4 +552,22 @@ describe('pMap', () => {
     // 10 items × 20ms each, but 10 concurrency → ~20ms total, not ~200ms
     expect(elapsed).toBeLessThan(100);
   });
+
+  it('throws RangeError for concurrency: 0', async () => {
+    await expect(
+      pMap([1, 2], async (x) => x, { concurrency: 0 }),
+    ).rejects.toThrow(RangeError);
+  });
+
+  it('throws RangeError for negative concurrency', async () => {
+    await expect(
+      pMap([1], async (x) => x, { concurrency: -1 }),
+    ).rejects.toThrow('positive integer');
+  });
+
+  it('throws RangeError for non-integer concurrency', async () => {
+    await expect(
+      pMap([1], async (x) => x, { concurrency: 2.5 }),
+    ).rejects.toThrow('positive integer');
+  });
 });

@@ -2,21 +2,28 @@
 name: notifications
 description: |
   @classytic/notifications — Multi-channel notification system for Node.js/TypeScript.
-  Use when sending email (Nodemailer/SES/Gmail), webhook, Slack, or custom channel
-  notifications with templates, retry, backoff, idempotency, preferences, or batch sending.
-  Triggers: notification, email, smtp, nodemailer, ses, webhook, slack, push notification,
-  multi-channel, send email, email template, retry backoff, idempotency, batch send,
-  quiet hours, notification preferences, event-driven notifications.
-version: "1.1.0"
+  Use when sending email (Nodemailer/SES/Gmail), SMS (Twilio/SNS/Vonage), push (FCM/Expo/OneSignal),
+  webhook, or custom channel notifications with rate limiting, delivery tracking, queue adapters,
+  templates, retry, backoff, idempotency, preferences, or batch sending.
+  Triggers: notification, email, smtp, nodemailer, ses, webhook, slack, push notification, sms,
+  twilio, fcm, expo, multi-channel, send email, email template, retry backoff, idempotency,
+  batch send, quiet hours, rate limit, delivery log, audit trail, queue, notification preferences,
+  event-driven notifications.
+version: "2.0.0"
 license: MIT
 metadata:
   author: Classytic
 tags:
   - notifications
   - email
+  - sms
+  - push
   - nodemailer
   - webhook
   - multi-channel
+  - rate-limiting
+  - delivery-tracking
+  - queue
   - templates
   - retry
   - idempotency
@@ -24,15 +31,15 @@ tags:
   - zero-dependencies
 progressive_disclosure:
   entry_point:
-    summary: "Multi-channel notifications: Email, Webhook, Console + custom. Zero required deps."
-    when_to_use: "Sending notifications via email/webhook/custom channels with templates, retry, and preferences"
-    quick_start: "1. npm install @classytic/notifications 2. new NotificationService({ channels, templates }) 3. service.send({ event, recipient, data, template })"
+    summary: "Multi-channel notifications: Email, SMS, Push, Webhook, Console + custom. Rate limiting, delivery tracking, queue adapters. Zero required deps."
+    when_to_use: "Sending notifications via email/SMS/push/webhook with rate limits, delivery tracking, templates, retry, and preferences"
+    quick_start: "1. npm install @classytic/notifications 2. new NotificationService({ channels, templates, deliveryLog }) 3. service.send({ event, recipient, data, template })"
   context_limit: 700
 ---
 
 # @classytic/notifications
 
-Multi-channel notification system with pluggable providers, templates, retry with backoff, and user preferences. Zero required dependencies — bring your own providers.
+Multi-channel notification system with pluggable providers, rate limiting, delivery tracking, queue adapters, templates, retry with backoff, and user preferences. Zero required dependencies — bring your own providers.
 
 **Requires:** Node.js `>=18`
 
@@ -48,27 +55,46 @@ npm install nodemailer
 ## Quick Start
 
 ```typescript
-import { NotificationService, EmailChannel, ConsoleChannel } from '@classytic/notifications';
+import { NotificationService } from '@classytic/notifications';
+import { EmailChannel, SmsChannel, PushChannel, ConsoleChannel } from '@classytic/notifications/channels';
+import { MemoryDeliveryLog, createSimpleResolver } from '@classytic/notifications/utils';
 
 const notifications = new NotificationService({
   channels: [
     new EmailChannel({
       from: 'App <noreply@app.com>',
       transport: { host: 'smtp.gmail.com', port: 587, auth: { user, pass } },
+      rateLimit: { maxPerWindow: 500, windowMs: 86_400_000 }, // Gmail 500/day
     }),
-    new ConsoleChannel(), // dev/testing — logs to console
+    new SmsChannel({
+      from: '+15551234567',
+      provider: {
+        send: async ({ to, from, body }) => {
+          const msg = await twilioClient.messages.create({ to, from, body });
+          return { sid: msg.sid };
+        },
+      },
+    }),
+    new PushChannel({
+      provider: {
+        send: async ({ token, title, body, data }) => {
+          const result = await admin.messaging().send({ token, notification: { title, body }, data });
+          return { messageId: result };
+        },
+      },
+    }),
+    new ConsoleChannel(), // dev/testing
   ],
-  templates: (id, data) => ({
-    subject: `Notification: ${id}`,
-    html: `<p>Hello ${data.name}</p>`,
-    text: `Hello ${data.name}`,
+  templates: createSimpleResolver({
+    welcome: { subject: 'Welcome, ${name}!', html: '<h1>Hi ${name}</h1>' },
   }),
   retry: { maxAttempts: 3, backoff: 'exponential' },
+  deliveryLog: new MemoryDeliveryLog(),
 });
 
 await notifications.send({
   event: 'user.created',
-  recipient: { email: 'user@example.com', name: 'John' },
+  recipient: { email: 'user@example.com', phone: '+15559876543', name: 'John' },
   data: { name: 'John' },
   template: 'welcome',
 });
@@ -78,12 +104,13 @@ await notifications.send({
 
 | Method | Description |
 |--------|-------------|
-| `send(payload)` | Send to all matching channels |
+| `send(payload)` | Send to all matching channels (or enqueue if queue is configured) |
 | `sendBatch(payloads, opts?)` | Batch send with concurrency control |
 | `addChannel(channel)` | Register channel at runtime |
 | `removeChannel(name)` | Remove channel by name |
 | `getChannel(name)` | Get channel by name |
 | `getChannelNames()` | List registered channel names |
+| `getDeliveryLog()` | Get the delivery log instance |
 | `createHooks(configs)` | Create event-specific hook handlers |
 | `on(event, handler)` | Listen to lifecycle events |
 | `off(event, handler)` | Remove listener |
@@ -101,6 +128,9 @@ new NotificationService({
     store?: IdempotencyStore;              // Default: MemoryIdempotencyStore
     ttl?: number;                          // Default: 86400000 (24h)
   };
+  deliveryLog?: DeliveryLog;              // Audit trail (default: none)
+  rateLimitStore?: RateLimitStore;        // Custom rate limit backend (auto-created if channels use rateLimit)
+  queue?: QueueAdapter;                   // Crash-resilient delivery (default: none)
 });
 ```
 
@@ -117,7 +147,7 @@ await notifications.send({
     deviceToken?: string;
     metadata?: Record<string, unknown>;
   };
-  data: Record<string, unknown>;           // Template data
+  data: Record<string, unknown>;           // Template data + channel-specific fields
   template?: string;                       // Template ID to resolve
   channels?: string[];                     // Target specific channels (omit = all)
   idempotencyKey?: string;                 // Deduplication key
@@ -133,7 +163,7 @@ await notifications.send({
   results: SendResult[];     // Per-channel results
   sent: number;              // Successful sends
   failed: number;            // Failed sends
-  skipped: number;           // Skipped (dedup, prefs, quiet hours)
+  skipped: number;           // Skipped (dedup, prefs, quiet hours, rate limited)
   duration: number;          // Wall-clock ms
 }
 ```
@@ -145,65 +175,94 @@ await notifications.send({
 Requires peer dep: `npm install nodemailer`. Lazily imported — zero overhead if unused.
 
 ```typescript
-import { EmailChannel } from '@classytic/notifications';
+import { EmailChannel } from '@classytic/notifications/channels';
 
-// SMTP
 new EmailChannel({
   from: 'App <noreply@app.com>',
   transport: { host: 'smtp.gmail.com', port: 587, auth: { user, pass } },
-});
-
-// Gmail shorthand
-new EmailChannel({
-  from: 'noreply@app.com',
-  transport: { service: 'gmail', auth: { user, pass } },
-});
-
-// Pre-created transporter (SES, custom)
-import nodemailer from 'nodemailer';
-new EmailChannel({
-  from: 'noreply@app.com',
-  transporter: nodemailer.createTransport({ /* SES config */ }),
+  rateLimit: { maxPerWindow: 500, windowMs: 86_400_000 }, // Gmail 500/day
 });
 ```
 
 **Email-specific payload fields** (set via template resolver or data): `subject`, `html`, `text`, `from` (override), `replyTo`, `cc`, `bcc`, `attachments`.
 
+**Security:** `config.defaults` can never override protected fields (`to`, `from`, `subject`, `html`, `text`, `cc`, `bcc`, `replyTo`, `attachments`) to prevent email misdirection.
+
 Methods: `verify()` (test SMTP connection), `close()` (cleanup).
 
-### WebhookChannel
+### SmsChannel (BYOP)
 
-Zero dependencies — native `fetch`. Sends JSON payload with event, recipient, data, timestamp.
+Zero dependencies — bring your own SMS SDK.
 
 ```typescript
-import { WebhookChannel } from '@classytic/notifications';
+import { SmsChannel } from '@classytic/notifications/channels';
 
-// Slack webhook
-new WebhookChannel({
-  name: 'slack',
-  url: 'https://hooks.slack.com/services/...',
-  events: ['order.completed', 'user.created'],
-});
-
-// Signed webhook (HMAC-SHA256)
-new WebhookChannel({
-  url: 'https://api.partner.com/webhooks',
-  secret: process.env.WEBHOOK_SECRET!,
-  headers: { 'X-API-Key': process.env.PARTNER_KEY! },
-  method: 'POST',        // or 'PUT'
-  timeout: 5000,          // ms, default: 10000
+const sms = new SmsChannel({
+  from: '+15551234567',
+  provider: {
+    send: async ({ to, from, body }) => {
+      const msg = await twilioClient.messages.create({ to, from, body });
+      return { sid: msg.sid };
+    },
+  },
 });
 ```
 
-Signature header: `X-Signature-256: sha256=<hex>`.
+**Provider interface:**
+```typescript
+interface SmsProvider {
+  send(message: { to: string; from: string; body: string }): Promise<{ sid: string }>;
+}
+```
+
+Body resolved from: `data.text` > `data.message` > `data.subject`.
+
+### PushChannel (BYOP)
+
+Zero dependencies — bring your own push SDK (FCM, Expo, OneSignal, APNs).
+
+```typescript
+import { PushChannel } from '@classytic/notifications/channels';
+
+const push = new PushChannel({
+  provider: {
+    send: async ({ token, title, body, data }) => {
+      const result = await admin.messaging().send({ token, notification: { title, body }, data });
+      return { messageId: result };
+    },
+  },
+});
+```
+
+**Provider interface:**
+```typescript
+interface PushProvider {
+  send(message: {
+    token: string; title: string; body: string;
+    data?: Record<string, string>; imageUrl?: string;
+  }): Promise<{ messageId: string }>;
+}
+```
+
+### WebhookChannel
+
+Zero dependencies — native `fetch`. HMAC-SHA256 payload signing.
+
+```typescript
+import { WebhookChannel } from '@classytic/notifications/channels';
+
+new WebhookChannel({
+  url: 'https://hooks.slack.com/services/...',
+  secret: process.env.WEBHOOK_SECRET!,       // optional HMAC signing
+  events: ['order.*'],
+});
+```
 
 ### ConsoleChannel
 
 Logs notifications to console. Zero dependencies.
 
 ```typescript
-import { ConsoleChannel } from '@classytic/notifications';
-
 new ConsoleChannel();                              // all events
 new ConsoleChannel({ events: ['user.*'] });        // scoped
 ```
@@ -213,90 +272,171 @@ new ConsoleChannel({ events: ['user.*'] });        // scoped
 Extend `BaseChannel` — implement one method:
 
 ```typescript
-import { BaseChannel } from '@classytic/notifications';
+import { BaseChannel } from '@classytic/notifications/channels';
 import type { ChannelConfig, NotificationPayload, SendResult } from '@classytic/notifications';
 
-interface SmsConfig extends ChannelConfig {
-  from: string;
-  apiKey: string;
+interface SlackConfig extends ChannelConfig {
+  webhookUrl: string;
 }
 
-class SmsChannel extends BaseChannel<SmsConfig> {
-  constructor(config: SmsConfig) {
-    super({ name: 'sms', ...config });
+class SlackChannel extends BaseChannel<SlackConfig> {
+  constructor(config: SlackConfig) {
+    super({ name: 'slack', ...config });
   }
 
   async send(payload: NotificationPayload): Promise<SendResult> {
-    if (!payload.recipient.phone) {
-      return { status: 'skipped', channel: this.name, error: 'No phone' };
-    }
-    // send SMS via your provider...
+    const res = await fetch(this.config.webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: String(payload.data.message) }),
+    });
+    if (!res.ok) return { status: 'failed', channel: this.name, error: res.statusText };
     return { status: 'sent', channel: this.name };
   }
 }
 ```
 
-### Event Filtering
+## Rate Limiting
 
-Channels only handle events matching their `events` whitelist. Supports wildcards:
-
-```typescript
-new WebhookChannel({
-  url: '...',
-  events: ['order.*'],    // matches order.created, order.completed, etc.
-});
-// Empty events array (or omitted) = handle ALL events
-```
-
-### Per-Channel Retry Override
+Per-channel token bucket via `rateLimit` on any `ChannelConfig`:
 
 ```typescript
-new NotificationService({
-  retry: { maxAttempts: 3, backoff: 'exponential' },   // global
-  channels: [
-    new EmailChannel({ ..., retry: { maxAttempts: 5 } }),       // more for email
-    new WebhookChannel({ ..., retry: { maxAttempts: 1 } }),     // disable for webhooks
-  ],
+new EmailChannel({
+  from: 'noreply@app.com',
+  transport: { ... },
+  rateLimit: { maxPerWindow: 500, windowMs: 86_400_000 }, // 500 per day
 });
 ```
 
-## Templates
+Rate-limited sends return `status: 'skipped'` with `error: 'Rate limited'`. Emits `send:rate_limited` event.
 
-Plug any template engine via a resolver function:
+For distributed systems, implement `RateLimitStore`:
+```typescript
+import type { RateLimitStore, RateLimitConfig } from '@classytic/notifications/utils';
+
+class RedisRateLimitStore implements RateLimitStore {
+  async consume(channel: string, config: RateLimitConfig): Promise<boolean> { /* ... */ }
+  async remaining(channel: string, config: RateLimitConfig): Promise<number> { /* ... */ }
+  async reset(channel: string): Promise<void> { /* ... */ }
+}
+```
+
+## Delivery Tracking
+
+Every notification attempt (sent, skipped, failed) is logged:
 
 ```typescript
-const notifications = new NotificationService({
-  templates: async (templateId, data) => {
-    // Return { subject?, html?, text?, ...extra }
-    // Extra keys are merged into payload.data
-    const html = await renderReactEmail(templateId, data);
-    return { subject: `Notification: ${templateId}`, html };
+import { MemoryDeliveryLog } from '@classytic/notifications/utils';
+
+const log = new MemoryDeliveryLog();
+const service = new NotificationService({ channels: [...], deliveryLog: log });
+
+// Query history
+const entries = log.query({ recipientId: 'u1', status: 'delivered', limit: 50 });
+```
+
+For production, implement `DeliveryLog` with your database.
+
+## Queue Adapter
+
+Crash-resilient delivery. The service owns the queue — it calls `process()` on construction. When configured, `send()` enqueues and returns `{ queued: true }`:
+
+```typescript
+import { MemoryQueue } from '@classytic/notifications/utils';
+
+const service = new NotificationService({
+  channels: [...],
+  queue: new MemoryQueue(),
+});
+
+await service.send({ ... }); // Returns immediately with { queued: true }
+```
+
+> If your app already has its own queue, don't pass it here. Have your existing worker call `service.send()` directly.
+
+For production, implement `QueueAdapter` with BullMQ or your database.
+
+## Scheduled / Delayed Delivery
+
+Add `delay` to any payload (requires queue adapter):
+
+```typescript
+await service.send({
+  event: 'reminder.appointment',
+  recipient: { email: 'user@example.com' },
+  data: { subject: 'Appointment tomorrow' },
+  delay: 3_600_000, // send in 1 hour
+});
+```
+
+Without a queue adapter, `delay` is ignored with a warning log.
+
+## Channel Fallback
+
+Try channels in priority order, stopping at the first success:
+
+```typescript
+import { withFallback } from '@classytic/notifications/utils';
+
+const result = await withFallback(service, payload, ['push', 'sms', 'email'], {
+  onFallback: (failed, error, next) => {
+    console.log(`${failed} failed (${error}), trying ${next}`);
+  },
+});
+```
+
+## Status Webhook Handler
+
+Ingest delivery status updates from providers:
+
+```typescript
+import { createStatusHandler } from '@classytic/notifications/utils';
+
+const handler = createStatusHandler({
+  onStatusChange: (update) => {
+    console.log(`${update.provider} ${update.notificationId}: ${update.status}`);
   },
 });
 
-await notifications.send({
-  event: 'user.created',
-  recipient: { email: 'user@example.com' },
-  data: { name: 'John' },
-  template: 'welcome',   // passed to resolver
+// In your route handler:
+handler.handle({
+  provider: 'twilio',
+  notificationId: req.body.MessageSid,
+  channel: 'sms',
+  status: mapTwilioStatus(req.body.MessageStatus), // from examples/providers.ts
+  timestamp: new Date(),
+  rawPayload: req.body,
 });
 ```
 
-Template result is merged into `payload.data` (template values take precedence) before sending to channels.
+**Delivery statuses:** `queued`, `accepted`, `sent`, `delivered`, `undelivered`, `bounced`, `opened`, `clicked`, `complained`, `unsubscribed`.
 
-**Type signature:**
+## Templates
+
+### Built-in Simple Resolver (zero deps)
+
 ```typescript
-type TemplateResolver = (
-  templateId: string,
-  data: Record<string, unknown>,
-) => TemplateResult | Promise<TemplateResult>;
+import { createSimpleResolver } from '@classytic/notifications/utils';
 
-interface TemplateResult {
-  subject?: string;
-  html?: string;
-  text?: string;
-  [key: string]: unknown;
-}
+const service = new NotificationService({
+  templates: createSimpleResolver({
+    welcome: { subject: 'Welcome, ${name}!', html: '<h1>Hi ${name}</h1>' },
+    order: { subject: 'Order #${orderId}', html: '<p>Hi ${user.name}</p>' },
+  }),
+});
+```
+
+Supports nested access: `${user.name}`.
+
+### Custom Template Engine
+
+Plug any engine via `TemplateResolver`:
+
+```typescript
+templates: async (id, data) => {
+  const html = await renderReactEmail(id, data);
+  return { subject: `Notification: ${id}`, html };
+},
 ```
 
 ## Retry + Backoff
@@ -310,42 +450,70 @@ interface TemplateResult {
 }
 ```
 
-Jitter (+-25%) applied automatically to prevent thundering herd.
-
-**Backoff calculation:**
-- **Exponential**: `delay = initialDelay * 2^(attempt-1)`
-- **Linear**: `delay = initialDelay * attempt`
-- **Fixed**: `delay = initialDelay`
+Jitter (+-25%) applied automatically. Per-channel overrides supported.
 
 ## Lifecycle Events
 
 ```typescript
-notifications.on('before:send', (payload) => { /* validate, rate-limit */ });
-notifications.on('after:send', (result) => { /* log dispatch result */ });
-notifications.on('send:success', (result) => { /* metrics */ });
-notifications.on('send:failed', (result) => { /* alert ops */ });
+notifications.on('before:send', (payload) => { /* validate */ });
+notifications.on('after:send', (result) => { /* always fires, even for skipped */ });
+notifications.on('send:success', (result) => { /* at least one channel sent */ });
+notifications.on('send:failed', (result) => { /* at least one channel failed */ });
 notifications.on('send:retry', ({ channel, attempt, error }) => { /* warn */ });
+notifications.on('send:rate_limited', ({ channel, event }) => { /* monitor */ });
+notifications.on('send:queued', ({ jobId, payload }) => { /* track */ });
 ```
 
 - `before:send` — **fail-fast**: throwing aborts the send
 - `after:send` / `send:success` / `send:failed` — **safe**: errors logged, never mask result
-- `send:retry` — errors caught and logged
+- All outcomes (including skips) emit `after:send` for audit completeness
+
+## Pluggable Interfaces
+
+| Interface | Purpose | Built-in |
+|-----------|---------|----------|
+| `SmsProvider` | SMS delivery | — (BYOP) |
+| `PushProvider` | Push notification delivery | — (BYOP) |
+| `TemplateResolver` | Template rendering | `createSimpleResolver()` |
+| `RateLimitStore` | Rate limit state | `MemoryRateLimitStore` |
+| `DeliveryLog` | Audit trail | `MemoryDeliveryLog` |
+| `QueueAdapter` | Crash-resilient queue | `MemoryQueue` |
+| `IdempotencyStore` | Deduplication | `MemoryIdempotencyStore` |
+| `PreferenceResolver` | User preference filtering | — (BYOP) |
 
 ## Subpath Imports
 
 ```typescript
 // Main (everything)
-import { NotificationService, EmailChannel, ... } from '@classytic/notifications';
+import { NotificationService, EmailChannel, SmsChannel, PushChannel, ... } from '@classytic/notifications';
 
 // Channels only
-import { BaseChannel, EmailChannel, WebhookChannel, ConsoleChannel } from '@classytic/notifications/channels';
+import { BaseChannel, EmailChannel, WebhookChannel, ConsoleChannel, SmsChannel, PushChannel } from '@classytic/notifications/channels';
 
 // Utilities only
-import { withRetry, pMap, isQuietHours, MemoryIdempotencyStore, mergeHooks } from '@classytic/notifications/utils';
-import { NotificationError, ChannelError, ProviderNotInstalledError, Emitter } from '@classytic/notifications/utils';
-import type { IdempotencyStore, QuietHoursConfig, PMapOptions } from '@classytic/notifications/utils';
+import {
+  createSimpleResolver, MemoryDeliveryLog, MemoryRateLimitStore, MemoryQueue,
+  MemoryIdempotencyStore, mergeHooks, pMap, withRetry, Emitter, isQuietHours,
+  withFallback, createStatusHandler,
+  NotificationError, ChannelError, ProviderNotInstalledError,
+} from '@classytic/notifications/utils';
+
+import type {
+  DeliveryLog, DeliveryStatus, StatusUpdate, StatusHandler,
+  RateLimitStore, QueueAdapter, IdempotencyStore,
+  FallbackOptions, QuietHoursConfig, PMapOptions,
+} from '@classytic/notifications/utils';
 ```
+
+## Provider Adapter Examples
+
+Copy-pasteable adapters for common providers are in [`examples/providers.ts`](../../examples/providers.ts):
+
+- **SMS:** `createTwilioSmsProvider()`, `createSnsSmsProvider()`, `createVonageSmsProvider()`
+- **Push:** `createFcmPushProvider()`, `createExpoPushProvider()`, `createOneSignalPushProvider()`
+- **Status mappers:** `mapTwilioStatus()`, `mapSesStatus()`, `mapSendGridStatus()`
 
 ## References (Progressive Disclosure)
 
-- **[advanced](references/advanced.md)** — Batch sending, idempotency, user preferences, quiet hours, hook factories, channel management
+- **[advanced](references/advanced.md)** — Batch sending, idempotency, user preferences, quiet hours, hook factories, channel management, full send lifecycle
+- **[observability](references/observability.md)** — Metrics, tracing, logging patterns, health checks, alerting rules, ops runbook

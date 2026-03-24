@@ -80,6 +80,11 @@ export class EmailChannel extends BaseChannel<EmailChannelConfig> {
     }
   }
 
+  /** Fields that defaults must never override */
+  private static readonly PROTECTED_FIELDS = new Set([
+    'to', 'from', 'subject', 'html', 'text', 'cc', 'bcc', 'replyTo', 'attachments',
+  ]);
+
   async send(payload: NotificationPayload): Promise<SendResult> {
     const { recipient, data } = payload;
 
@@ -89,11 +94,23 @@ export class EmailChannel extends BaseChannel<EmailChannelConfig> {
 
     const transporter = await this.getTransporter();
 
+    // Defaults go first — per-send fields always win.
+    // Protected fields (to, from, subject, etc.) are stripped from defaults
+    // to prevent accidental misdirection of emails.
+    const safeDefaults: Record<string, unknown> = {};
+    if (this.config.defaults) {
+      for (const [key, value] of Object.entries(this.config.defaults)) {
+        if (!EmailChannel.PROTECTED_FIELDS.has(key)) {
+          safeDefaults[key] = value;
+        }
+      }
+    }
+
     const mailOptions: Record<string, unknown> = {
+      ...safeDefaults,
       from: data.from as string ?? this.config.from,
       to: recipient.email,
       subject: data.subject as string ?? '',
-      ...this.config.defaults,
     };
 
     if (data.html) mailOptions.html = data.html;
