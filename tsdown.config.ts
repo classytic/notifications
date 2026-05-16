@@ -4,6 +4,7 @@ export default defineConfig({
   entry: [
     'src/index.ts',
     'src/channels/index.ts',
+    'src/providers/index.ts',
     'src/utils/index.ts',
   ],
   format: 'esm',

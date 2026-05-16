@@ -31,6 +31,23 @@ npm install @classytic/notifications
 npm install nodemailer
 ```
 
+### Module Format
+
+This package is **ESM-only** (`"type": "module"`, Node 18+, no CJS build).
+That means:
+
+- ✅ ESM consumers — `import { ... } from '@classytic/notifications'` just works.
+- ⚠️ CommonJS consumers — you must use a dynamic import:
+  ```js
+  const { NotificationService } = await import('@classytic/notifications');
+  ```
+  A top-level `require('@classytic/notifications')` will fail with
+  `ERR_REQUIRE_ESM`. If you're starting a new project, prefer ESM
+  (`"type": "module"` in your `package.json`) or use a bundler/runtime
+  that handles ESM natively (Vite, Next.js, Bun, modern Node).
+- TypeScript declarations are emitted as `.d.mts`. `typesVersions` is
+  configured so node10-style resolvers still resolve subpaths.
+
 ## Quick Start
 
 ```typescript
@@ -109,6 +126,75 @@ import nodemailer from 'nodemailer';
 const email = new EmailChannel({
   from: 'noreply@app.com',
   transporter: nodemailer.createTransport({ /* SES config */ }),
+});
+```
+
+### Email Providers (`/providers`)
+
+For multi-tenant apps where each org brings its own email provider, use the
+`/providers` surface to render a credential form, validate the connection,
+and build a transporter from the stored blob — no per-provider branching
+in your host code.
+
+```typescript
+import {
+  EMAIL_PRESETS,
+  EMAIL_PROVIDER_OPTIONS,
+  buildEmailTransport,
+  buildFromHeader,
+  getEmailCredentialSchema,
+  testEmailCredential,
+  type EmailCredentialData,
+  type EmailProviderName,
+} from '@classytic/notifications/providers';
+import { EmailChannel } from '@classytic/notifications/channels';
+
+// 1. Render a dynamic form from the schema (provider select + the union
+//    of all provider-specific fields — UI hides what's not relevant).
+const fields = getEmailCredentialSchema();
+
+// 2. "Test Connection" — opens an SMTP connection and runs `verify()`.
+//    Returns `{ status: 'OK' | 'Error', message }` instead of throwing.
+const result = await testEmailCredential({
+  provider: 'resend',
+  fromEmail: 'hello@yourdomain.com',
+  fromName: 'Your Brand',
+  apiKey: 're_xxx',
+});
+
+// 3. At send time, turn the encrypted DB blob into a transporter and
+//    plug it straight into EmailChannel.
+const data: EmailCredentialData = /* decrypted from DB */;
+const transporter = await buildEmailTransport(data);
+const channel = new EmailChannel({
+  from: buildFromHeader(data),  // '"Brand" <hello@…>' or bare email
+  transporter,
+});
+```
+
+**Supported providers** — every one is SMTP under the hood:
+
+| `provider` | Host | Auth fields | Notes |
+|---|---|---|---|
+| `resend` | `smtp.resend.com:465` | `apiKey` | User is the literal `resend` |
+| `gmail` | `smtp.gmail.com:465` | `user`, `password` | App Password, NOT account password |
+| `sendgrid` | `smtp.sendgrid.net:587` | `apiKey` | User is the literal `apikey` |
+| `mailgun` | `smtp.mailgun.org:465` | `user`, `password` | Per-domain SMTP creds |
+| `ses` | `email-smtp.us-east-1.amazonaws.com:465` | `user`, `password` | SES IAM SMTP creds. Override `host` for other regions |
+| `smtp` | user-supplied | `host`, `port`, `secure`, `user`, `password` | Any auth-SMTP server |
+
+Host override is allowed only for `smtp` and `ses` (regional). Other
+presets pin the host to prevent footguns like "I changed the host but
+kept the Resend API key".
+
+```typescript
+// SES in eu-west-1
+await buildEmailTransport({
+  provider: 'ses',
+  fromEmail: 'support@yourdomain.com',
+  user: 'AKIAxxxx',
+  password: 'BFxxxx',
+  host: 'email-smtp.eu-west-1.amazonaws.com',
 });
 ```
 

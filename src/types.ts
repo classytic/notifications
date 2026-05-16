@@ -84,6 +84,18 @@ export interface Channel {
   readonly name: string;
   shouldHandle(event: string): boolean;
   send(payload: NotificationPayload): Promise<SendResult>;
+  /**
+   * Optional pre-flight check. Return a `SendResult` (typically with
+   * `status: 'skipped'`) to short-circuit before the service consumes a
+   * rate-limit token or starts the retry loop. Return `null` to proceed.
+   *
+   * Built-in channels use this to skip when the payload obviously can't
+   * be delivered (no `recipient.email` for `EmailChannel`, no
+   * `recipient.phone` for `SmsChannel`, etc.) so a mixed-channel batch
+   * doesn't burn the quota of one channel because another channel's
+   * recipient field is missing.
+   */
+  canSend?(payload: NotificationPayload): SendResult | null;
 }
 
 // ============================================================================
@@ -300,6 +312,20 @@ export interface NotificationServiceConfig {
   rateLimitStore?: import('./utils/rate-limiter.js').RateLimitStore;
   /** Queue adapter for crash-resilient delivery. Service owns the queue. */
   queue?: import('./utils/queue.js').QueueAdapter;
+  /**
+   * How the queue processor signals failure back to the queue adapter.
+   *
+   *   - `'throw-on-total-failure'` (default) — the processor throws
+   *     when a dispatch had `sent === 0 && failed > 0`, so the queue
+   *     marks the job failed (and retries up to `maxAttempts`). Partial
+   *     successes (some channels sent) resolve normally to avoid
+   *     double-sending the channels that already succeeded.
+   *   - `'always-complete'` — legacy behavior. The processor never
+   *     throws; queued jobs always resolve as completed, regardless of
+   *     channel outcome. Keep this if your delivery log is the source
+   *     of truth for failures and you don't want queue-level retries.
+   */
+  queueFailureMode?: 'throw-on-total-failure' | 'always-complete';
 }
 
 /** Service lifecycle events */

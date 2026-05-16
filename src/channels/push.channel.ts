@@ -77,6 +77,30 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
     this.provider = config.provider;
   }
 
+  /**
+   * Pre-flight check called by the service before consuming a rate-limit
+   * token. Skip when there's no device token or no displayable content.
+   */
+  canSend(payload: NotificationPayload): SendResult | null {
+    if (!payload.recipient.deviceToken) {
+      return { status: 'skipped', channel: this.name, error: 'No recipient deviceToken' };
+    }
+    const title = (payload.data.title as string) ?? (payload.data.subject as string) ?? '';
+    const body =
+      (payload.data.body as string) ??
+      (payload.data.text as string) ??
+      (payload.data.message as string) ??
+      '';
+    if (!title && !body) {
+      return {
+        status: 'skipped',
+        channel: this.name,
+        error: 'No title or body (data.title, data.body)',
+      };
+    }
+    return null;
+  }
+
   async send(payload: NotificationPayload): Promise<SendResult> {
     const { recipient, data } = payload;
 

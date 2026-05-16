@@ -97,6 +97,7 @@ export class NotificationService {
   private deliveryLog?: DeliveryLog;
   private rateLimitStore?: RateLimitStore;
   private queueAdapter?: QueueAdapter;
+  private queueFailureMode: 'throw-on-total-failure' | 'always-complete';
 
   constructor(config: NotificationServiceConfig = {}) {
     this.channels = config.channels ?? [];
@@ -123,11 +124,35 @@ export class NotificationService {
       this.rateLimitStore = new MemoryRateLimitStore();
     }
 
+    // Queue failure semantics — default favors correctness (queued jobs
+    // that failed to deliver any channel are surfaced to the queue
+    // adapter so its retry policy kicks in). Hosts that prefer the
+    // legacy "always complete" behavior can opt in.
+    this.queueFailureMode = config.queueFailureMode ?? 'throw-on-total-failure';
+
     // Queue adapter — service owns the queue, wires up processing immediately
     if (config.queue) {
       this.queueAdapter = config.queue;
       this.queueAdapter.process(async (payload) => {
-        await this.sendDirect(payload);
+        const dispatch = await this.sendDirect(payload);
+        // Signal failure to the queue adapter only when the entire
+        // dispatch failed (no channel sent). Partial success resolves
+        // normally — retrying would double-send the channels that
+        // already succeeded.
+        if (
+          this.queueFailureMode === 'throw-on-total-failure' &&
+          dispatch.sent === 0 &&
+          dispatch.failed > 0
+        ) {
+          const summary = dispatch.results
+            .filter((r) => r.status === 'failed')
+            .map((r) => `${r.channel}: ${r.error ?? 'unknown error'}`)
+            .join('; ');
+          throw new NotificationError(
+            `Queued dispatch for "${dispatch.event}" failed on every channel: ${summary || 'no detail'}`,
+            { code: 'QUEUE_DISPATCH_FAILED' },
+          );
+        }
       });
     }
   }
@@ -396,7 +421,27 @@ export class NotificationService {
     channel: Channel,
     payload: NotificationPayload,
   ): Promise<SendResult> {
-    // Rate limit check
+    // 0. Pre-flight skip — runs BEFORE rate-limit so deterministic skips
+    //    (no recipient.email, no body, opt-out, etc.) don't burn quota.
+    //    Custom channels can opt in via the optional `canSend` method;
+    //    omitting it preserves prior behavior.
+    if (typeof channel.canSend === 'function') {
+      try {
+        const preflight = channel.canSend(payload);
+        if (preflight) {
+          return preflight;
+        }
+      } catch (err) {
+        // A buggy canSend() shouldn't block the send pipeline — fall
+        // through to send() and let the channel's regular error path
+        // handle it.
+        this.logger.warn(
+          `[${channel.name}] canSend() threw, falling through to send(): ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    // 1. Rate limit check
     const rateLimit = this.getChannelRateLimit(channel);
     if (rateLimit && this.rateLimitStore) {
       const allowed = await this.rateLimitStore.consume(channel.name, rateLimit);

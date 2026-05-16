@@ -75,6 +75,30 @@ export class SmsChannel extends BaseChannel<SmsChannelConfig> {
     this.provider = config.provider;
   }
 
+  /**
+   * Pre-flight check called by the service before consuming a rate-limit
+   * token. Skip if the payload lacks a recipient phone OR a body — these
+   * skips are deterministic and shouldn't burn SMS quota.
+   */
+  canSend(payload: NotificationPayload): SendResult | null {
+    if (!payload.recipient.phone) {
+      return { status: 'skipped', channel: this.name, error: 'No recipient phone number' };
+    }
+    const body =
+      (payload.data.text as string) ??
+      (payload.data.message as string) ??
+      (payload.data.subject as string) ??
+      '';
+    if (!body) {
+      return {
+        status: 'skipped',
+        channel: this.name,
+        error: 'No message body (data.text, data.message, or data.subject)',
+      };
+    }
+    return null;
+  }
+
   async send(payload: NotificationPayload): Promise<SendResult> {
     const { recipient, data } = payload;
 

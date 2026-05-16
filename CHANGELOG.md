@@ -2,6 +2,90 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.1.0] - 2026-05-17
+
+### Added
+
+- **Email provider abstraction** at the new `@classytic/notifications/providers`
+  subpath export — for multi-tenant hosts that need to store an SMTP
+  credential per organization and route sends through it:
+  - `EMAIL_PRESETS` / `EMAIL_PROVIDER_OPTIONS` — Resend, Gmail (App
+    Password), SendGrid, Mailgun, AWS SES (SMTP), and Custom SMTP. Every
+    preset is SMTP-based; the table captures host / port / secure /
+    userSource / passSource and leaves the secret bits to the
+    credential blob.
+  - `buildEmailTransport(data)` — turns an `EmailCredentialData` blob
+    into a `nodemailer.Transporter`. Dynamic `import('nodemailer')` so
+    the peer stays optional.
+  - `buildFromHeader(data)` — formats `"Brand" <hello@…>` (or bare
+    email).
+  - `getEmailCredentialSchema()` — union-of-fields form schema; the UI
+    hides irrelevant fields based on the selected provider.
+  - `testEmailCredential(data)` — opens an SMTP connection and runs
+    `verify()`. Returns `{ status: 'OK' | 'Error', message }` instead
+    of throwing.
+- SES preset opts into `allowHostOverride` so callers can target a
+  non-default region by supplying
+  `host: 'email-smtp.<region>.amazonaws.com'`. Fixed-host presets
+  (Resend / Gmail / SendGrid / Mailgun) deliberately ignore host
+  overrides to prevent "changed host, kept the API key" footguns.
+- **`Channel.canSend(payload)` pre-flight hook (optional).** Channels
+  can return a `SendResult` (typically `{ status: 'skipped' }`) before
+  the service consumes a rate-limit token. Built-in `EmailChannel`,
+  `SmsChannel`, and `PushChannel` implement it to skip when the
+  recipient field for that channel is missing — preventing a mixed-
+  channel batch from burning, say, email quota on a payload that was
+  never going to deliver email. Channels that omit `canSend` keep
+  working exactly as before.
+- **`queueFailureMode` config knob** on `NotificationService`. Controls
+  how the queue processor signals failure to the queue adapter:
+  - `'throw-on-total-failure'` (new default) — when
+    `sent === 0 && failed > 0`, the processor throws so the queue
+    marks the job failed and its retry policy kicks in. Partial
+    successes resolve normally so a retry can't double-send the
+    channels that already delivered.
+  - `'always-complete'` — legacy behavior preserved for hosts whose
+    delivery log is the source of truth for failures.
+
+### Changed
+
+- **Queue jobs no longer silently complete on total dispatch failure.**
+  Previously, the queue processor swallowed `DispatchResult` and
+  resolved every job, so `MemoryQueue` (or a BullMQ adapter) would
+  mark a job completed even when every channel raised. The processor
+  now propagates total failure under the default `queueFailureMode`.
+  Opt back into the old behavior with
+  `queueFailureMode: 'always-complete'`.
+- **Rate-limit tokens are no longer consumed for deterministic skips.**
+  `sendToChannel` calls `channel.canSend?.(payload)` before
+  `rateLimitStore.consume()`. This fixes a quota-exhaustion footgun
+  where a payload addressing an email recipient with no `phone` would
+  still decrement the SMS channel's quota.
+- `package.json` adds a `typesVersions` map so node10-style resolvers
+  find subpath declarations (`./channels`, `./providers`, `./utils`).
+
+### Test infrastructure
+
+- Live network tests now live behind a dedicated
+  `vitest.live.config.ts` and the `npm run test:live` script. The
+  default `npm test` glob no longer includes `*.live.test.ts`, so a
+  fresh checkout — even with the workspace `.env.dev` mounted —
+  cannot accidentally trigger real SMTP sends.
+- `prepublishOnly` and `release` now run `npm test` (unit suite) in
+  addition to the build + typecheck.
+- New live "send" suite (`EMAIL_LIVE_SEND_TO=<inbox>`) actually invokes
+  `nodemailer.sendMail` for each provider with creds in the
+  environment, so deliverability can be smoke-tested before publish.
+  The send gate is intentionally NOT placed in shared env files —
+  export it per-shell.
+- `tests/setup-env.ts` auto-loads workspace `../.env.dev` plus
+  package-local `.env` / `.env.test` / `.env.test.local`; shell vars
+  always win.
+
+### Dependencies
+
+- `nodemailer >=6` remains the only optional peer dependency.
+
 ## [2.0.0] - 2026-03-24
 
 ### Added

@@ -85,6 +85,19 @@ export class EmailChannel extends BaseChannel<EmailChannelConfig> {
     'to', 'from', 'subject', 'html', 'text', 'cc', 'bcc', 'replyTo', 'attachments',
   ]);
 
+  /**
+   * Pre-flight check called by the service before consuming a rate-limit
+   * token. Returning a skip result here avoids burning quota on payloads
+   * that obviously can't deliver (e.g., a mixed-channel batch where the
+   * recipient has a phone but no email).
+   */
+  canSend(payload: NotificationPayload): SendResult | null {
+    if (!payload.recipient.email) {
+      return { status: 'skipped', channel: this.name, error: 'No recipient email' };
+    }
+    return null;
+  }
+
   async send(payload: NotificationPayload): Promise<SendResult> {
     const { recipient, data } = payload;
 
