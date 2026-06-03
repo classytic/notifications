@@ -22,6 +22,12 @@ export interface QuietHoursConfig {
  * Supports overnight ranges (e.g. 22:00 - 07:00).
  * Returns false if start/end are missing or malformed.
  *
+ * Note: an invalid `timezone` (not a recognised IANA zone) causes
+ * `Intl.DateTimeFormat` to throw a `RangeError` — this function does not
+ * catch it. `NotificationService` calls this inside its preference try/catch
+ * and fails open (sends anyway) on such errors; standalone callers should
+ * validate the timezone or wrap the call themselves.
+ *
  * @param quiet - Quiet hours config with start, end, and optional timezone
  * @param now - Current date (defaults to new Date(), injectable for testing)
  */

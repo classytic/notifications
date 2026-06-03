@@ -33,7 +33,8 @@
  * ```
  */
 
-import type { Channel, ChannelConfig, NotificationPayload, SendResult } from '../types.js';
+import type { Channel, ChannelConfig, NotificationPayload, RetryConfig, SendResult } from '../types.js';
+import type { RateLimitConfig } from '../utils/rate-limiter.js';
 
 export abstract class BaseChannel<TConfig extends ChannelConfig = ChannelConfig> implements Channel {
   readonly name: string;
@@ -42,6 +43,16 @@ export abstract class BaseChannel<TConfig extends ChannelConfig = ChannelConfig>
   constructor(config: TConfig) {
     this.name = config.name ?? this.constructor.name;
     this.config = config;
+  }
+
+  /** Per-channel rate limit (from config) — read by the service. */
+  get rateLimit(): RateLimitConfig | undefined {
+    return this.config.rateLimit;
+  }
+
+  /** Per-channel retry override (from config) — read by the service. */
+  get retry(): RetryConfig | undefined {
+    return this.config.retry;
   }
 
   /** Check if this channel should handle a given event */

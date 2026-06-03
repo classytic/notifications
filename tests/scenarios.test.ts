@@ -248,9 +248,9 @@ describe('Scenario: Rate-limited marketing email blast', () => {
     expect(log.size).toBe(8);
 
     const delivered = log.query({ status: 'delivered' });
-    const failed = log.query({ status: 'failed' });
+    const skipped = log.query({ status: 'skipped' });
     expect(delivered).toHaveLength(5);
-    expect(failed).toHaveLength(3); // rate-limited = 0 sent = "failed" status in log
+    expect(skipped).toHaveLength(3); // rate-limited → 0 sent, 0 failed → 'skipped' in delivery log
   });
 });
 
@@ -507,7 +507,8 @@ describe('Scenario: Batch send with mixed outcomes', () => {
     // All 4 in delivery log
     expect(log.size).toBe(4);
     expect(log.query({ status: 'delivered' })).toHaveLength(2);
-    expect(log.query({ status: 'failed' })).toHaveLength(2);
+    // Rate-limited sends produce skipped channel results → delivery status is 'skipped', not 'failed'
+    expect(log.query({ status: 'skipped' })).toHaveLength(2);
   });
 });
 

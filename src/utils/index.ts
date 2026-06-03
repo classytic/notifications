@@ -27,8 +27,8 @@ export { MemoryQueue } from './queue.js';
 export type { QueueAdapter, QueueJob, QueueJobStatus, QueueEnqueueOptions, QueueProcessor } from './queue.js';
 
 // v2: Built-in template resolver
-export { createSimpleResolver } from './template-engine.js';
-export type { TemplateDefinition, TemplateMap } from './template-engine.js';
+export { createSimpleResolver, interpolateHtml } from './template-engine.js';
+export type { TemplateDefinition, TemplateMap, InterpolateOptions } from './template-engine.js';
 
 // v2: Channel fallback
 export { withFallback } from './fallback.js';

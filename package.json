@@ -1,6 +1,6 @@
 {
   "name": "@classytic/notifications",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Multi-channel notifications (Email, SMS, Push, Webhook) with rate limiting, delivery tracking, queue adapters, channel fallback, templates, retry — zero required dependencies",
   "type": "module",
   "sideEffects": false,
@@ -107,11 +107,11 @@
   "devDependencies": {
     "@classytic/dev-tools": "^0.2.0",
     "@types/node": "^22.0.0",
-    "@types/nodemailer": "^6.4.17",
-    "@vitest/coverage-v8": "3.2.4",
-    "nodemailer": "^6.10.1",
-    "tsdown": "0.21.4",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "@types/nodemailer": "^8.0.0",
+    "@vitest/coverage-v8": "4.1.8",
+    "nodemailer": "^8.0.10",
+    "tsdown": "0.22.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   }
 }

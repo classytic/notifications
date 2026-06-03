@@ -2,6 +2,16 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.2.0] - 2026-06-03
+
+- `SendResult.retryable?: boolean` — when `false`, service short-circuits `withRetry` immediately (permanent failures: bad credentials, invalid address, hard bounce, 4xx)
+- `Channel.rateLimit` / `Channel.retry` promoted to first-class interface properties; `BaseChannel` exposes both from config via getters (removes internal casts)
+- `EmailChannel.allowSenderOverride` — opt-in per-send `data.from` override (default `false`; guards multi-tenant sender-spoofing footgun)
+- `EmailChannel` RFC 8058 `List-Unsubscribe` / `List-Unsubscribe-Post` header injection
+- `interpolateHtml` + `InterpolateOptions` / `SimpleResolverOptions` exported from main entry
+- Retry-layer clarification comment: queue retry × channel retry compose multiplicatively; docs advise setting one to 1 when the other owns durability
+- Rate-limit token accounting clarified: one token per `sendToChannel` call; retries inside `withRetry` do not each consume a token
+
 ## [2.1.0] - 2026-05-17
 
 ### Added

@@ -34,7 +34,8 @@ describe('MemoryQueue', () => {
   let queue: MemoryQueue;
 
   beforeEach(() => {
-    queue = new MemoryQueue();
+    // Use retryDelay: 0 so retry backoff timers fire immediately in tests.
+    queue = new MemoryQueue({ retryDelay: 0 });
   });
 
   it('enqueues and returns a job ID', () => {

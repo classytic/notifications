@@ -170,7 +170,7 @@ describe('queue processor failure semantics', () => {
   }
 
   it('default mode: total failure marks the queue job failed (after retries)', async () => {
-    const queue = new MemoryQueue({ concurrency: 1 });
+    const queue = new MemoryQueue({ concurrency: 1, retryDelay: 0 });
     const service = new NotificationService({
       channels: [makeFailingChannel()],
       queue,
@@ -198,7 +198,7 @@ describe('queue processor failure semantics', () => {
   });
 
   it('partial success does NOT throw — job completes (avoids double-send on retry)', async () => {
-    const queue = new MemoryQueue({ concurrency: 1 });
+    const queue = new MemoryQueue({ concurrency: 1, retryDelay: 0 });
     const service = new NotificationService({
       channels: [makeSucceedingChannel(), makeFailingChannel()],
       queue,
@@ -218,7 +218,7 @@ describe('queue processor failure semantics', () => {
   });
 
   it('always-complete mode preserves legacy behavior (no throw on total failure)', async () => {
-    const queue = new MemoryQueue({ concurrency: 1 });
+    const queue = new MemoryQueue({ concurrency: 1, retryDelay: 0 });
     const service = new NotificationService({
       channels: [makeFailingChannel()],
       queue,

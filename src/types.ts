@@ -46,6 +46,14 @@ export interface SendResult {
   channel: string;
   duration?: number;
   error?: string;
+  /**
+   * When `false`, the service will NOT retry this result even if the global
+   * `retry.maxAttempts > 1`. Use for permanent failures: invalid recipient
+   * address, bad credentials, hard bounce, 4xx from provider.
+   *
+   * Unset / `true` means the failure is transient and should be retried.
+   */
+  retryable?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -82,6 +90,19 @@ export interface ChannelConfig {
 /** Channel interface - implement this for custom channels */
 export interface Channel {
   readonly name: string;
+  /**
+   * Optional per-channel rate limit, read by the service before sending.
+   * `BaseChannel` exposes this from `config.rateLimit`; custom channels that
+   * implement `Channel` directly should surface it here so the service
+   * applies the limit (otherwise the channel is treated as unlimited).
+   */
+  readonly rateLimit?: import('./utils/rate-limiter.js').RateLimitConfig;
+  /**
+   * Optional per-channel retry override, read by the service. When unset the
+   * service's global retry config applies. `BaseChannel` exposes this from
+   * `config.retry`.
+   */
+  readonly retry?: RetryConfig;
   shouldHandle(event: string): boolean;
   send(payload: NotificationPayload): Promise<SendResult>;
   /**
@@ -134,6 +155,37 @@ export interface EmailChannelConfig extends ChannelConfig {
   transporter?: NodemailerTransporter;
   /** Default mail options merged into every send */
   defaults?: Record<string, unknown>;
+  /**
+   * Allow a per-send `payload.data.from` to override the channel's `from`
+   * address. Default `false` (safe).
+   *
+   * The `data` bag is frequently populated from template output and
+   * upstream/user-controlled input, so honouring `data.from` unconditionally
+   * is a sender-spoofing footgun in multi-tenant systems. Keep this `false`
+   * unless you fully control `data.from` and genuinely need per-send senders
+   * (e.g. sending on behalf of verified sub-accounts).
+   */
+  allowSenderOverride?: boolean;
+  /**
+   * RFC 8058 `List-Unsubscribe` header injection.
+   *
+   * When set, every outbound email receives:
+   *   `List-Unsubscribe: <https://…/unsubscribe>, <mailto:…>`
+   *   `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
+   *
+   * Gmail, Outlook and Yahoo surface the one-click unsubscribe button
+   * when these headers are present. Required by CAN-SPAM, CASL, and the
+   * 2024 Google/Yahoo bulk-sender requirements for marketing email.
+   *
+   * Per-send values (from `payload.data.listUnsubscribeUrl`) override this
+   * channel-level default, allowing subscriber-specific unsubscribe links.
+   */
+  listUnsubscribe?: {
+    /** HTTPS URL that handles the one-click POST (RFC 8058 §3.2) */
+    url?: string;
+    /** Mailto address for clients that don't support HTTP unsubscribe */
+    email?: string;
+  };
 }
 
 /** Minimal Nodemailer transporter interface (avoids hard dep) */

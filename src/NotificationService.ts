@@ -67,7 +67,6 @@ import type {
   BatchResult,
   TemplateResolver,
   PreferenceResolver,
-  RetryConfig,
   ResolvedRetryConfig,
   Logger,
   ServiceEvent,
@@ -130,7 +129,20 @@ export class NotificationService {
     // legacy "always complete" behavior can opt in.
     this.queueFailureMode = config.queueFailureMode ?? 'throw-on-total-failure';
 
-    // Queue adapter — service owns the queue, wires up processing immediately
+    // Queue adapter — service owns the queue, wires up processing immediately.
+    //
+    // NOTE on retry layering: when a queue is attached, a failed delivery can
+    // be retried by TWO independent mechanisms that compose multiplicatively:
+    //   1. Channel-level retry (`retry` / per-channel `retry`) inside
+    //      sendDirect → sendToChannel, up to `maxAttempts` provider calls per
+    //      processing pass.
+    //   2. Queue-level retry — the processor throws on total failure (see
+    //      `queueFailureMode`), so the adapter re-runs the job up to ITS own
+    //      `maxAttempts`.
+    // Worst case provider calls ≈ channelMaxAttempts × queueMaxAttempts. If
+    // you rely on the queue for durability, consider setting channel
+    // `retry.maxAttempts` to 1 and letting the queue own retries (or vice
+    // versa) to avoid surprising amplification.
     if (config.queue) {
       this.queueAdapter = config.queue;
       this.queueAdapter.process(async (payload) => {
@@ -338,6 +350,12 @@ export class NotificationService {
           }
         }
       } catch (err) {
+        // Fail-open: any error while resolving/applying preferences —
+        // including an invalid IANA timezone in `quiet` that makes
+        // `isQuietHours` throw via Intl.DateTimeFormat — is swallowed and the
+        // notification proceeds to all channels. We favor delivering over
+        // silently dropping on a preferences bug; the error is logged so the
+        // misconfiguration is still visible.
         this.logger.warn('Preference resolution failed, sending to all channels', err);
       }
     }
@@ -442,6 +460,19 @@ export class NotificationService {
     }
 
     // 1. Rate limit check
+    //
+    // Token accounting: exactly ONE token is consumed per send attempt to
+    // this channel (i.e. per call to sendToChannel), taken up-front. Two
+    // consequences worth knowing:
+    //   - Retries inside withRetry() below do NOT each consume a token, so a
+    //     3-attempt retry that makes up to 3 provider requests still counts
+    //     as 1 against the limit. For a "max N messages" provider cap (e.g.
+    //     Gmail 500/day) this is correct; for a strict per-second request
+    //     cap it slightly under-counts the real request rate.
+    //   - The token is NOT refunded if the send ultimately fails. A failed
+    //     delivery still burns quota, because at provider level the request
+    //     was made (and may have been partially processed). Size the limit
+    //     against attempts, not successes.
     const rateLimit = this.getChannelRateLimit(channel);
     if (rateLimit && this.rateLimitStore) {
       const allowed = await this.rateLimitStore.consume(channel.name, rateLimit);
@@ -461,18 +492,30 @@ export class NotificationService {
       }
     }
 
-    const channelRetryRaw = (channel as { config?: { retry?: RetryConfig } }).config?.retry;
-
     // Use channel-specific retry if explicitly configured, otherwise global.
-    const retryConfig = channelRetryRaw
-      ? resolveRetryConfig(channelRetryRaw)
+    const retryConfig = channel.retry
+      ? resolveRetryConfig(channel.retry)
       : this.retryConfig;
 
     const start = Date.now();
 
+    // Sentinel used to short-circuit withRetry on non-retryable results.
+    const NON_RETRYABLE = Symbol('non_retryable');
+
     try {
       const result = await withRetry(
-        () => channel.send(payload),
+        async () => {
+          const r = await channel.send(payload);
+          // Non-retryable failures (bad credentials, invalid address,
+          // hard bounce, 4xx provider response) — surface immediately.
+          if (r.status === 'failed' && r.retryable === false) {
+            const err = Object.assign(new Error(r.error ?? 'non-retryable failure'), {
+              [NON_RETRYABLE]: r,
+            });
+            throw err;
+          }
+          return r;
+        },
         retryConfig,
         (attempt, error) => {
           this.logger.warn(
@@ -490,6 +533,11 @@ export class NotificationService {
 
       return { ...result, duration: Date.now() - start };
     } catch (err) {
+      // Unwrap non-retryable sentinel — return the channel's own result.
+      if (err instanceof Error && NON_RETRYABLE in err) {
+        const r = (err as any)[NON_RETRYABLE] as SendResult;
+        return { ...r, duration: Date.now() - start };
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`[${channel.name}] Failed: ${message}`);
       return {
@@ -503,7 +551,7 @@ export class NotificationService {
 
   /** Extract rate limit config from a channel */
   private getChannelRateLimit(channel: Channel): RateLimitConfig | undefined {
-    return (channel as { config?: { rateLimit?: RateLimitConfig } }).config?.rateLimit;
+    return channel.rateLimit;
   }
 
   // ===========================================================================

@@ -119,9 +119,16 @@ export class EmailChannel extends BaseChannel<EmailChannelConfig> {
       }
     }
 
+    // Per-send `from` override is gated behind `allowSenderOverride` (default
+    // off) to prevent sender spoofing via the free-form `data` bag.
+    const sender =
+      this.config.allowSenderOverride && typeof data.from === 'string'
+        ? data.from
+        : this.config.from;
+
     const mailOptions: Record<string, unknown> = {
       ...safeDefaults,
-      from: data.from as string ?? this.config.from,
+      from: sender,
       to: recipient.email,
       subject: data.subject as string ?? '',
     };
@@ -132,6 +139,23 @@ export class EmailChannel extends BaseChannel<EmailChannelConfig> {
     if (data.cc) mailOptions.cc = data.cc;
     if (data.bcc) mailOptions.bcc = data.bcc;
     if (data.attachments) mailOptions.attachments = data.attachments;
+
+    // RFC 8058 List-Unsubscribe headers (CAN-SPAM / CASL / Google+Yahoo 2024).
+    // Per-send `listUnsubscribeUrl` in payload.data overrides the channel default
+    // so each subscriber can get their own token-based unsubscribe link.
+    const unsubUrl = (data.listUnsubscribeUrl as string | undefined) ?? this.config.listUnsubscribe?.url;
+    const unsubEmail = (data.listUnsubscribeEmail as string | undefined) ?? this.config.listUnsubscribe?.email;
+    if (unsubUrl || unsubEmail) {
+      const parts: string[] = [];
+      if (unsubUrl) parts.push(`<${unsubUrl}>`);
+      if (unsubEmail) parts.push(`<mailto:${unsubEmail}>`);
+      const existingHeaders = (mailOptions.headers as Record<string, string> | undefined) ?? {};
+      mailOptions.headers = {
+        ...existingHeaders,
+        'List-Unsubscribe': parts.join(', '),
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      };
+    }
 
     try {
       const result = await transporter.sendMail(mailOptions);

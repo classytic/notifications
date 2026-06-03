@@ -22,6 +22,7 @@
  * ```
  */
 
+import { randomUUID } from 'node:crypto';
 import type { DispatchResult, NotificationPayload, SendResult } from '../types.js';
 
 /** A single delivery log entry */
@@ -41,7 +42,7 @@ export interface DeliveryLogEntry {
   /** Per-channel results */
   results: SendResult[];
   /** Overall status */
-  status: 'delivered' | 'partial' | 'failed';
+  status: 'delivered' | 'partial' | 'failed' | 'skipped';
   /** Total duration in ms */
   duration: number;
   /** Original payload metadata */
@@ -54,7 +55,7 @@ export interface DeliveryLogQuery {
   recipientEmail?: string;
   event?: string;
   channel?: string;
-  status?: 'delivered' | 'partial' | 'failed';
+  status?: 'delivered' | 'partial' | 'failed' | 'skipped';
   /** Only entries after this date */
   after?: Date;
   /** Only entries before this date */
@@ -73,9 +74,9 @@ export interface DeliveryLog {
   get(id: string): DeliveryLogEntry | null | Promise<DeliveryLogEntry | null>;
 }
 
-/** Generate a simple unique ID */
+/** Generate a collision-free log entry ID (Node 18+ `crypto.randomUUID`). */
 function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return randomUUID();
 }
 
 /**
@@ -160,9 +161,12 @@ export class MemoryDeliveryLog implements DeliveryLog {
     this.entries = [];
   }
 
-  private resolveStatus(dispatch: DispatchResult): 'delivered' | 'partial' | 'failed' {
+  private resolveStatus(dispatch: DispatchResult): 'delivered' | 'partial' | 'failed' | 'skipped' {
     if (dispatch.sent > 0 && dispatch.failed === 0) return 'delivered';
     if (dispatch.sent > 0 && dispatch.failed > 0) return 'partial';
+    // All channels skipped (quiet hours, preferences, rate limit, no recipient) —
+    // not a failure; the notification was intentionally suppressed.
+    if (dispatch.failed === 0 && dispatch.skipped > 0) return 'skipped';
     return 'failed';
   }
 }

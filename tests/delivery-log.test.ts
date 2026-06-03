@@ -288,7 +288,7 @@ describe('NotificationService - Delivery Log', () => {
     // Both should be logged — the second as skipped
     expect(log.size).toBe(2);
     const entries = log.query({});
-    expect(entries[0].status).toBe('failed'); // 0 sent, 0 failed, 1 skipped
+    expect(entries[0].status).toBe('skipped'); // 0 sent, 0 failed, 1 skipped — correctly classified
     expect(entries[1].status).toBe('delivered');
   });
 
@@ -308,8 +308,8 @@ describe('NotificationService - Delivery Log', () => {
 
     expect(log.size).toBe(1);
     const entries = log.query({});
-    // Skipped due to quiet hours, so status should be 'failed' (0 sent)
-    expect(entries[0].status).toBe('failed');
+    // Skipped due to quiet hours — 0 sent, 0 failed, >0 skipped → 'skipped'
+    expect(entries[0].status).toBe('skipped');
   });
 
   it('emits after:send for skipped notifications', async () => {

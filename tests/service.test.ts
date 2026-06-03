@@ -337,6 +337,56 @@ describe('NotificationService - Retry', () => {
     expect(attempts).toBe(5);
   });
 
+  it('honors retry declared on a raw Channel (not extending BaseChannel)', async () => {
+    let attempts = 0;
+    // Implements the Channel interface directly — surfaces `retry` as an
+    // interface property rather than via BaseChannel's config getter.
+    const ch: Channel = {
+      name: 'raw',
+      retry: { maxAttempts: 4, backoff: 'fixed', initialDelay: 10 },
+      shouldHandle: () => true,
+      async send() {
+        attempts++;
+        if (attempts < 4) throw new Error('Fail');
+        return { status: 'sent', channel: 'raw' };
+      },
+    };
+
+    const service = new NotificationService({
+      channels: [ch],
+      retry: { maxAttempts: 1 }, // global: no retry
+    });
+
+    const result = await service.send(makePayload());
+    expect(result.sent).toBe(1);
+    expect(attempts).toBe(4);
+  });
+
+  it('honors rateLimit declared on a raw Channel (not extending BaseChannel)', async () => {
+    let sends = 0;
+    const ch: Channel = {
+      name: 'raw-limited',
+      rateLimit: { maxPerWindow: 1, windowMs: 60_000 },
+      shouldHandle: () => true,
+      async send() {
+        sends++;
+        return { status: 'sent', channel: 'raw-limited' };
+      },
+    };
+
+    // No explicit rateLimitStore — the service must auto-create one because
+    // the raw channel surfaces `rateLimit` via the interface.
+    const service = new NotificationService({ channels: [ch] });
+
+    const first = await service.send(makePayload());
+    const second = await service.send(makePayload());
+
+    expect(first.sent).toBe(1);
+    expect(second.skipped).toBe(1); // rate limited
+    expect(second.results[0].error).toBe('Rate limited');
+    expect(sends).toBe(1);
+  });
+
   it('channel can disable retry with maxAttempts: 1 even when global retry is set', async () => {
     let attempts = 0;
     const ch = new (class extends BaseChannel<ChannelConfig & { retry: { maxAttempts: number } }> {
@@ -906,11 +956,8 @@ describe('NotificationService - Quiet Hours', () => {
     });
 
     // 23:00 UTC → inside quiet hours
-    const originalDate = Date;
-    const mockNow = new Date('2024-06-15T23:00:00Z');
-    vi.spyOn(globalThis, 'Date').mockImplementation(
-      (...args: unknown[]) => args.length ? new originalDate(...(args as [string])) : mockNow,
-    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-06-15T23:00:00Z'));
 
     const result = await service.send(makePayload());
 
@@ -918,7 +965,7 @@ describe('NotificationService - Quiet Hours', () => {
     expect(result.skipped).toBe(1);
     expect(ch.sent).toHaveLength(0);
 
-    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('sends notification outside quiet hours', async () => {
@@ -932,18 +979,15 @@ describe('NotificationService - Quiet Hours', () => {
     });
 
     // 12:00 UTC → outside quiet hours
-    const originalDate = Date;
-    const mockNow = new Date('2024-06-15T12:00:00Z');
-    vi.spyOn(globalThis, 'Date').mockImplementation(
-      (...args: unknown[]) => args.length ? new originalDate(...(args as [string])) : mockNow,
-    );
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2024-06-15T12:00:00Z'));
 
     const result = await service.send(makePayload());
 
     expect(result.sent).toBe(1);
     expect(ch.sent).toHaveLength(1);
 
-    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it('ignores quiet hours when no recipient ID', async () => {

@@ -397,7 +397,7 @@ describe('EmailChannel', () => {
     await expect(ch.send(payload)).rejects.toThrow('string error');
   });
 
-  it('uses data.from over config.from when provided', async () => {
+  it('ignores data.from by default (no sender override)', async () => {
     const mockSendMail = vi.fn().mockResolvedValue({ messageId: '<1>' });
     const ch = new EmailChannel({
       from: 'default@app.com',
@@ -406,10 +406,41 @@ describe('EmailChannel', () => {
 
     await ch.send({
       ...payload,
+      data: { ...payload.data, from: 'spoofed@evil.com' },
+    });
+
+    // Without allowSenderOverride, the configured sender always wins —
+    // prevents sender spoofing via the free-form data bag.
+    expect(mockSendMail.mock.calls[0][0].from).toBe('default@app.com');
+  });
+
+  it('uses data.from over config.from only when allowSenderOverride is true', async () => {
+    const mockSendMail = vi.fn().mockResolvedValue({ messageId: '<1>' });
+    const ch = new EmailChannel({
+      from: 'default@app.com',
+      transporter: { sendMail: mockSendMail },
+      allowSenderOverride: true,
+    });
+
+    await ch.send({
+      ...payload,
       data: { ...payload.data, from: 'custom@app.com' },
     });
 
     expect(mockSendMail.mock.calls[0][0].from).toBe('custom@app.com');
+  });
+
+  it('falls back to config.from when allowSenderOverride is on but data.from is absent', async () => {
+    const mockSendMail = vi.fn().mockResolvedValue({ messageId: '<1>' });
+    const ch = new EmailChannel({
+      from: 'default@app.com',
+      transporter: { sendMail: mockSendMail },
+      allowSenderOverride: true,
+    });
+
+    await ch.send(payload);
+
+    expect(mockSendMail.mock.calls[0][0].from).toBe('default@app.com');
   });
 
   it('passes replyTo from data', async () => {

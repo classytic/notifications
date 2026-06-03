@@ -28,6 +28,7 @@
  * ```
  */
 
+import { randomUUID } from 'node:crypto';
 import type { NotificationPayload } from '../types.js';
 
 /** Status of a queued job */
@@ -40,6 +41,8 @@ export interface QueueJob {
   status: QueueJobStatus;
   attempts: number;
   maxAttempts: number;
+  retryDelay: number;
+  maxRetryDelay: number;
   createdAt: Date;
   updatedAt: Date;
   error?: string;
@@ -81,14 +84,25 @@ export interface QueueEnqueueOptions {
   delay?: number;
   /** Max processing attempts (default: 3) */
   maxAttempts?: number;
+  /**
+   * Base delay in ms between retry attempts.
+   * Actual delay uses exponential backoff with ±25% jitter:
+   *   attempt 1 → retryDelay * 2^0 = retryDelay
+   *   attempt 2 → retryDelay * 2^1
+   *   attempt 3 → retryDelay * 2^2
+   * Capped at `maxRetryDelay`. Default: 1000 (1 second).
+   */
+  retryDelay?: number;
+  /** Maximum backoff delay cap in ms. Default: 30000 (30 seconds). */
+  maxRetryDelay?: number;
 }
 
 /** Processor function called by the queue for each job */
 export type QueueProcessor = (payload: NotificationPayload) => Promise<void>;
 
-/** Generate a simple unique ID */
+/** Generate a collision-free job ID (Node 18+ `crypto.randomUUID`). */
 function generateId(): string {
-  return `q-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+  return `q-${randomUUID()}`;
 }
 
 /**
@@ -106,8 +120,13 @@ export class MemoryQueue implements QueueAdapter {
   private activeCount = 0;
   private delayTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  constructor(options?: { concurrency?: number }) {
+  private readonly defaultRetryDelay: number;
+  private readonly defaultMaxRetryDelay: number;
+
+  constructor(options?: { concurrency?: number; retryDelay?: number; maxRetryDelay?: number }) {
     this.concurrency = options?.concurrency ?? 5;
+    this.defaultRetryDelay = options?.retryDelay ?? 1_000;
+    this.defaultMaxRetryDelay = options?.maxRetryDelay ?? 30_000;
   }
 
   enqueue(payload: NotificationPayload, options?: QueueEnqueueOptions): string {
@@ -118,6 +137,8 @@ export class MemoryQueue implements QueueAdapter {
       status: 'pending',
       attempts: 0,
       maxAttempts: options?.maxAttempts ?? 3,
+      retryDelay: options?.retryDelay ?? this.defaultRetryDelay,
+      maxRetryDelay: options?.maxRetryDelay ?? this.defaultMaxRetryDelay,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -165,6 +186,17 @@ export class MemoryQueue implements QueueAdapter {
     this.drain_queue();
   }
 
+  /**
+   * Drain the queue: cancel delayed timers and remove all not-yet-running
+   * jobs from the pipeline.
+   *
+   * Semantics note: drained jobs (both delayed-but-unfired and pending) are
+   * marked with status `'completed'`, NOT a distinct "drained"/"cancelled"
+   * state — `QueueJobStatus` has no such value. So `'completed'` here means
+   * "no longer in the queue", which is NOT the same as "delivered". Anything
+   * that treats `completed` as proof of delivery (dashboards, metrics) should
+   * read delivery success from the delivery log, not from queue job status.
+   */
   drain(): void {
     // Cancel delayed timers so they don't fire after drain
     for (const timer of this.delayTimers.values()) {
@@ -228,15 +260,26 @@ export class MemoryQueue implements QueueAdapter {
         })
         .catch((err) => {
           const message = err instanceof Error ? err.message : String(err);
+          job.error = message;
+          job.updatedAt = new Date();
           if (job.attempts < job.maxAttempts) {
+            // Exponential backoff with ±25% jitter to spread retry load.
+            const base = Math.min(
+              job.retryDelay * Math.pow(2, job.attempts - 1),
+              job.maxRetryDelay,
+            );
+            const jitter = base * 0.25 * (Math.random() * 2 - 1);
+            const delay = Math.max(0, Math.round(base + jitter));
+
             job.status = 'pending';
-            job.error = message;
-            job.updatedAt = new Date();
-            this.pending.push(jobId);
+            const timer = setTimeout(() => {
+              this.delayTimers.delete(jobId);
+              this.pending.push(jobId);
+              this.drain_queue();
+            }, delay);
+            this.delayTimers.set(jobId, timer);
           } else {
             job.status = 'failed';
-            job.error = message;
-            job.updatedAt = new Date();
           }
         })
         .finally(() => {
