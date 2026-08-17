@@ -122,6 +122,23 @@ export class SmsChannel extends BaseChannel<SmsChannelConfig> {
       return {
         status: 'sent',
         channel: this.name,
+        /**
+         * The TYPED correlation key. SMS is the case that makes the argument:
+         * the provider calls it `sid`, email calls it `messageId`, push calls
+         * it `messageId` — three spellings for one concept, so a delivery
+         * receipt (a DLR) could only be joined back to its send by code that
+         * already knew which channel had produced the result. That is the
+         * exact coupling `SendResult.providerMessageId` removes.
+         */
+        providerMessageId: result.sid,
+        /**
+         * Kept for one release alongside the typed field. Dropping it here
+         * would be a silent removal in a MINOR — exactly what 2.3.0 did to
+         * email's `metadata.messageId`, breaking readers with no signal.
+         * Removed in 3.0.0, from every channel at once.
+         *
+         * @deprecated read `providerMessageId`; removed in 3.0.0
+         */
         metadata: { sid: result.sid },
       };
     } catch (err) {

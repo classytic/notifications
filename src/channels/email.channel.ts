@@ -172,6 +172,17 @@ export class EmailChannel extends BaseChannel<EmailChannelConfig> {
          * find the id — which is why `SendResult.providerMessageId` exists.
          */
         providerMessageId: result.messageId,
+        /**
+         * RESTORED in 2.4.0. 2.3.0 introduced `providerMessageId` and deleted this
+         * in the same MINOR, so a consumer reading `metadata.messageId` lost it on
+         * a range-satisfying upgrade with nothing to tell them — the removal was
+         * correct in direction and wrong in timing. It is back for the deprecation
+         * window, so all three id-bearing channels behave identically, and 3.0.0
+         * removes it from every channel at once as one deliberate break.
+         *
+         * @deprecated read `providerMessageId`; removed in 3.0.0
+         */
+        metadata: { messageId: result.messageId },
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

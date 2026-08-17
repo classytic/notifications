@@ -1,6 +1,6 @@
 {
   "name": "@classytic/notifications",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "Multi-channel notifications (Email, SMS, Push, Webhook) with rate limiting, delivery tracking, queue adapters, channel fallback, templates, retry — zero required dependencies",
   "type": "module",
   "sideEffects": false,

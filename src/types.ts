@@ -102,8 +102,21 @@ export interface SendResult {
    * Optional because it is genuinely absent for synchronous channels (in-app feed) and
    * for providers that acknowledge without issuing an id. Absent means "no correlation
    * is possible", NOT "delivery unknown" — a consumer must not infer failure from it.
+   *
+   * Populated by every channel whose provider issues one: `email` (`messageId`),
+   * `push` (`messageId`), `sms` (`sid`). `webhook` and `console` leave it unset
+   * because there is no id to report — a 2xx from an HTTP POST is not a message
+   * identifier, and inventing one would make an unjoinable send look joinable.
    */
   providerMessageId?: string;
+  /**
+   * Free-form per-channel extras.
+   *
+   * Until 3.0.0 the id-bearing channels ALSO mirror their provider id here under
+   * the legacy key (`messageId` for email/push, `sid` for sms). That duplication
+   * is the deprecation window, not the contract: read {@link providerMessageId},
+   * which is the same value under one name on every channel.
+   */
   metadata?: Record<string, unknown>;
 }
 

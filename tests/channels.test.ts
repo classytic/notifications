@@ -3,6 +3,8 @@ import { BaseChannel } from '../src/channels/BaseChannel.js';
 import { ConsoleChannel } from '../src/channels/console.channel.js';
 import { WebhookChannel } from '../src/channels/webhook.channel.js';
 import { EmailChannel } from '../src/channels/email.channel.js';
+import { PushChannel } from '../src/channels/push.channel.js';
+import { SmsChannel } from '../src/channels/sms.channel.js';
 import type { NotificationPayload, SendResult, ChannelConfig } from '../src/types.js';
 
 // ===========================================================================
@@ -534,3 +536,112 @@ describe('EmailChannel', () => {
   });
 });
 
+
+// ===========================================================================
+// providerMessageId — the cross-channel correlation contract
+//
+// The point of the field is that a consumer can join a delivery receipt back
+// to its send WITHOUT knowing which channel produced the result. That property
+// only holds if EVERY id-bearing channel populates it, so these cases assert
+// the whole set rather than one channel: 2.3.0 added it to email alone, and a
+// consumer reading `providerMessageId` silently got `undefined` for push and
+// sms while the id sat in `metadata` under two different keys.
+// ===========================================================================
+
+describe('providerMessageId across channels', () => {
+  const pushPayload: NotificationPayload = {
+    event: 'user.created',
+    recipient: { id: 'u1', deviceToken: 'tok_123', name: 'Test User' },
+    data: { title: 'Welcome', body: 'Hello' },
+  };
+  const smsPayload: NotificationPayload = {
+    event: 'user.created',
+    recipient: { id: 'u1', phone: '+15551234567', name: 'Test User' },
+    data: { text: 'Hello' },
+  };
+
+  it('EmailChannel reports the provider id under the typed field', async () => {
+    const ch = new EmailChannel({
+      from: 'noreply@app.com',
+      transporter: { sendMail: vi.fn().mockResolvedValue({ messageId: '<abc@test>' }) },
+    });
+    const result = await ch.send(payload);
+    expect(result.providerMessageId).toBe('<abc@test>');
+  });
+
+  it('PushChannel reports the provider id under the typed field', async () => {
+    const ch = new PushChannel({
+      provider: { send: vi.fn().mockResolvedValue({ messageId: 'fcm_987' }) },
+    });
+    const result = await ch.send(pushPayload);
+    expect(result.status).toBe('sent');
+    expect(result.providerMessageId).toBe('fcm_987');
+  });
+
+  it('SmsChannel maps the provider-specific `sid` onto the typed field', async () => {
+    // The case that justifies the field: the provider says `sid`, email says
+    // `messageId`. One name out, whatever the vendor calls it.
+    const ch = new SmsChannel({
+      from: '+15550000000',
+      provider: { send: vi.fn().mockResolvedValue({ sid: 'SM123' }) },
+    });
+    const result = await ch.send(smsPayload);
+    expect(result.status).toBe('sent');
+    expect(result.providerMessageId).toBe('SM123');
+  });
+
+  it('a consumer can read the id WITHOUT branching on channel', async () => {
+    // The actual contract, stated as the thing it enables. If any id-bearing
+    // channel regresses to metadata-only, this is what fails.
+    const results = await Promise.all([
+      new EmailChannel({
+        from: 'noreply@app.com',
+        transporter: { sendMail: vi.fn().mockResolvedValue({ messageId: 'M1' }) },
+      }).send(payload),
+      new PushChannel({ provider: { send: vi.fn().mockResolvedValue({ messageId: 'M2' }) } }).send(
+        pushPayload,
+      ),
+      new SmsChannel({
+        from: '+15550000000',
+        provider: { send: vi.fn().mockResolvedValue({ sid: 'M3' }) },
+      }).send(smsPayload),
+    ]);
+    expect(results.map((r) => r.providerMessageId)).toEqual(['M1', 'M2', 'M3']);
+  });
+
+  it('keeps the legacy metadata key on every id-bearing channel until 3.0.0', async () => {
+    // 2.3.0 deleted email's `metadata.messageId` in a MINOR, so readers lost it
+    // on a range-satisfying upgrade with no signal. All three now mirror the id
+    // for the deprecation window; 3.0.0 drops it everywhere at once.
+    const email = await new EmailChannel({
+      from: 'noreply@app.com',
+      transporter: { sendMail: vi.fn().mockResolvedValue({ messageId: 'M1' }) },
+    }).send(payload);
+    const push = await new PushChannel({
+      provider: { send: vi.fn().mockResolvedValue({ messageId: 'M2' }) },
+    }).send(pushPayload);
+    const sms = await new SmsChannel({
+      from: '+15550000000',
+      provider: { send: vi.fn().mockResolvedValue({ sid: 'M3' }) },
+    }).send(smsPayload);
+
+    expect(email.metadata?.messageId).toBe('M1');
+    expect(push.metadata?.messageId).toBe('M2');
+    expect(sms.metadata?.sid).toBe('M3');
+  });
+
+  it('leaves it UNSET where the provider issues no id', async () => {
+    // Absent must mean "no correlation is possible", not "unknown delivery".
+    // A 2xx from an HTTP POST is not a message identifier; synthesising one
+    // would make an unjoinable send look joinable.
+    const console = await new ConsoleChannel().send(payload);
+    expect(console.status).toBe('sent');
+    expect(console.providerMessageId).toBeUndefined();
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+    const webhook = await new WebhookChannel({ url: 'https://example.com/hook' }).send(payload);
+    expect(webhook.status).toBe('sent');
+    expect(webhook.providerMessageId).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+});

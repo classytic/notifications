@@ -2,6 +2,62 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.4.0] - 2026-08-17
+
+### Fixed — `providerMessageId` now works the way 2.3.0 claimed
+
+2.3.0 introduced `SendResult.providerMessageId` as the cross-channel correlation
+key but populated it on **email only**, so the property it exists to provide did not
+hold: a consumer reading `providerMessageId` got a value for email and `undefined`
+for push and sms, and still had to know which channel produced the result before it
+could find the id in the untyped `metadata` bag. A half-migrated contract is worse
+than none — it reads as available and silently isn't.
+
+- **`PushChannel` sets `providerMessageId`** (from the provider's `messageId`).
+- **`SmsChannel` sets `providerMessageId`** (from the provider's `sid`). This is the
+  case that motivates the field: three vendors, three spellings (`messageId`, `id`,
+  `sid`), one concept.
+- `WebhookChannel` and `ConsoleChannel` deliberately leave it **unset** — a 2xx from
+  an HTTP POST is not a message identifier, and synthesising one would make an
+  unjoinable send look joinable. Absent means "no correlation is possible", never
+  "delivery unknown".
+
+### Fixed — restores `metadata.messageId` on `EmailChannel`
+
+2.3.0 deleted it in the same MINOR that added `providerMessageId`, so anyone reading
+`metadata.messageId` lost it on a range-satisfying `^2.2.0` upgrade with nothing to
+signal the change. The removal was right in direction and wrong in timing. It is
+back for a deprecation window.
+
+**All three id-bearing channels now mirror their provider id under both names** —
+`providerMessageId` (read this) and the legacy `metadata` key (`messageId` for
+email/push, `sid` for sms). **3.0.0 removes the legacy keys from every channel at
+once**, as one deliberate break rather than three accidental ones.
+
+Pinned by `tests/channels.test.ts` → `providerMessageId across channels`, including
+a case that asserts a consumer can read the id **without branching on channel** —
+the actual contract, so a channel regressing to metadata-only fails there.
+
+## [2.3.0] - 2026-08-16
+
+Recorded retroactively; this release shipped without a changelog entry.
+
+### Added
+
+- **`SendResult.providerMessageId`** — the typed cross-channel correlation key, so a
+  delivery receipt (SES bounce, SMS DLR, push feedback) can be joined back to the
+  send that produced it.
+- **`SendResult.subject`** + `NotificationSubject` (`{ sourceModel, sourceId }`) —
+  the business document a notification concerns, so "show me every message we sent
+  about invoice X" stops being a scan over an unindexed `metadata` blob.
+
+### Changed — BREAKING, shipped as a minor
+
+- `EmailChannel` stopped emitting `metadata.messageId`. Readers of that key broke on
+  upgrade with no signal. **Restored in 2.4.0**; upgrade straight to 2.4.0.
+- Only `EmailChannel` populated `providerMessageId`; push and sms did not. **Fixed
+  in 2.4.0.**
+
 ## [2.2.0] - 2026-06-03
 
 - `SendResult.retryable?: boolean` — when `false`, service short-circuits `withRetry` immediately (permanent failures: bad credentials, invalid address, hard bounce, 4xx)

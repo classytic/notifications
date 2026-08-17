@@ -127,6 +127,22 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
       return {
         status: 'sent',
         channel: this.name,
+        /**
+         * The TYPED correlation key — same contract email publishes. A push
+         * receipt (FCM/APNs feedback, an Expo receipt lookup) arrives naming
+         * this id, and until it was here a consumer had to know the result
+         * came from THIS channel before it could find it under the untyped
+         * key `metadata.messageId`.
+         */
+        providerMessageId: result.messageId,
+        /**
+         * Kept for one release alongside the typed field. Dropping it here
+         * would be a silent removal in a MINOR — exactly what 2.3.0 did to
+         * email's `metadata.messageId`, breaking readers with no signal.
+         * Removed in 3.0.0, from every channel at once.
+         *
+         * @deprecated read `providerMessageId`; removed in 3.0.0
+         */
         metadata: { messageId: result.messageId },
       };
     } catch (err) {
