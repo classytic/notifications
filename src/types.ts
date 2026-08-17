@@ -21,6 +21,21 @@ export interface Recipient {
 }
 
 /** Notification payload sent through the service */
+/**
+ * A reference to the business document a notification concerns.
+ *
+ * Deliberately the same `{ sourceModel, sourceId }` shape as
+ * `@classytic/primitives`' `ExternalRef` — declared structurally here rather than
+ * imported, because this kernel takes no dependency on primitives. A host that
+ * uses `ExternalRef` can pass it straight through.
+ */
+export interface NotificationSubject {
+  /** Owning model name, stated by the owning package (e.g. 'Invoice'). */
+  sourceModel: string;
+  /** The document id. */
+  sourceId: string;
+}
+
 export interface NotificationPayload {
   /** Event name that triggered this notification */
   event: string;
@@ -34,6 +49,21 @@ export interface NotificationPayload {
   channels?: string[];
   /** Arbitrary metadata (passed through to results) */
   metadata?: Record<string, unknown>;
+  /**
+   * The BUSINESS DOCUMENT this notification is about — `{ sourceModel, sourceId }`,
+   * the `ExternalRef` shape used across the platform for cross-collection refs.
+   *
+   * Distinct from `event` (what happened) and from `metadata` (a free-form bag):
+   * this is the correlation key that answers "show me every message we sent about
+   * invoice X". Without it that question is a collection scan over an unindexed
+   * `metadata` blob, so in practice nothing asks it — a document screen cannot
+   * show its own send history, and a support agent cannot answer "did the customer
+   * ever receive it?".
+   *
+   * Optional: a broadcast to a segment is about no single document, and a
+   * `subject` invented for it would be a lie.
+   */
+  subject?: NotificationSubject;
   /** Idempotency key — duplicate sends with the same key are skipped */
   idempotencyKey?: string;
   /** Delay delivery by this many milliseconds (requires queue adapter) */
@@ -54,6 +84,26 @@ export interface SendResult {
    * Unset / `true` means the failure is transient and should be retried.
    */
   retryable?: boolean;
+  /**
+   * The PROVIDER's id for the message it accepted — the correlation key.
+   *
+   * Delivery is asynchronous everywhere it matters: a gateway accepts a message and
+   * reports what happened to it later, over a webhook (WhatsApp `statuses[]`, an SES
+   * bounce, an SMS DLR). That callback identifies the message by the id it issued at
+   * send time, so without this the two halves cannot be joined — a receipt arrives
+   * naming a message nothing here can find, and `status: 'sent'` stays the last word
+   * on a message that was never delivered.
+   *
+   * FIRST-CLASS rather than another key in `metadata`: a correlation identifier that
+   * every asynchronous channel needs is a contract, and in an untyped bag each
+   * channel spells it differently (`messageId`, `id`, `sid`) until the consumer has
+   * to know which channel it is looking at.
+   *
+   * Optional because it is genuinely absent for synchronous channels (in-app feed) and
+   * for providers that acknowledge without issuing an id. Absent means "no correlation
+   * is possible", NOT "delivery unknown" — a consumer must not infer failure from it.
+   */
+  providerMessageId?: string;
   metadata?: Record<string, unknown>;
 }
 

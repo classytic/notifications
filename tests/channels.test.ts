@@ -259,7 +259,10 @@ describe('EmailChannel', () => {
     const result = await ch.send(payload);
 
     expect(result.status).toBe('sent');
-    expect(result.metadata?.messageId).toBe('<abc@test>');
+    // The TYPED field. It lived in `metadata` — an untyped bag where every channel
+    // spells the id differently, so a consumer had to know which channel produced the
+    // result before it could correlate a bounce webhook back to this send.
+    expect(result.providerMessageId).toBe('<abc@test>');
     expect(mockSendMail).toHaveBeenCalledOnce();
 
     const mailOpts = mockSendMail.mock.calls[0][0];

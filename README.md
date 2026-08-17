@@ -1,5 +1,7 @@
 # @classytic/notifications
 
+[![Sponsor](https://img.shields.io/github/sponsors/classytic?style=flat-square&label=Sponsor&logo=GitHub&color=EA4AAA)](https://github.com/sponsors/classytic)
+
 > Multi-channel notification system for TypeScript/Node.js
 
 Pluggable channels, templates, retry with backoff, rate limiting, delivery tracking, and user preferences. Zero required dependencies — bring your own providers.
@@ -724,3 +726,7 @@ import type {
 ## License
 
 MIT
+
+## Trademark
+
+MIT-licensed code. "Classytic"/"arc" names + logos are trademarks of Classytic LLC — see [TRADEMARK.md](TRADEMARK.md).

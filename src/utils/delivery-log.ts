@@ -23,7 +23,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { DispatchResult, NotificationPayload, SendResult } from '../types.js';
+import type { DispatchResult, NotificationPayload, NotificationSubject, SendResult } from '../types.js';
 
 /** A single delivery log entry */
 export interface DeliveryLogEntry {
@@ -47,6 +47,12 @@ export interface DeliveryLogEntry {
   duration: number;
   /** Original payload metadata */
   metadata?: Record<string, unknown>;
+  /**
+   * The business document this delivery was about (see
+   * `NotificationPayload.subject`). Carried verbatim so a store can index it —
+   * this is what makes "every message sent about invoice X" a keyed read.
+   */
+  subject?: NotificationSubject;
 }
 
 /** Query filter for delivery log entries */
@@ -54,6 +60,12 @@ export interface DeliveryLogQuery {
   recipientId?: string;
   recipientEmail?: string;
   event?: string;
+  /**
+   * Filter to one business document. A store MUST support this as an indexed
+   * read — a `metadata` scan would work at ten rows and time out at ten million,
+   * which is the version of "supported" that fails only in production.
+   */
+  subject?: NotificationSubject;
   channel?: string;
   status?: 'delivered' | 'partial' | 'failed' | 'skipped';
   /** Only entries after this date */
@@ -105,6 +117,7 @@ export class MemoryDeliveryLog implements DeliveryLog {
       status: this.resolveStatus(dispatch),
       duration: dispatch.duration,
       metadata: payload.metadata,
+      ...(payload.subject ? { subject: payload.subject } : {}),
     };
 
     this.entries.push(entry);
@@ -127,6 +140,14 @@ export class MemoryDeliveryLog implements DeliveryLog {
     }
     if (filter.event) {
       results = results.filter(e => e.event === filter.event);
+    }
+    if (filter.subject) {
+      const { sourceModel, sourceId } = filter.subject;
+      // BOTH parts, always. Matching on id alone would collide across models
+      // the moment two collections share an ObjectId space.
+      results = results.filter(
+        e => e.subject?.sourceModel === sourceModel && e.subject?.sourceId === sourceId,
+      );
     }
     if (filter.channel) {
       results = results.filter(e => e.channels.includes(filter.channel!));

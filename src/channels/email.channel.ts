@@ -162,7 +162,16 @@ export class EmailChannel extends BaseChannel<EmailChannelConfig> {
       return {
         status: 'sent',
         channel: this.name,
-        metadata: { messageId: result.messageId },
+        /**
+         * The TYPED field, not `metadata.messageId`.
+         *
+         * This id is what a bounce or complaint webhook arrives under, so it is the
+         * only thing joining this send to what actually happened to the mail. It sat
+         * in the untyped `metadata` bag, where every channel spells it differently
+         * and a consumer has to know which channel produced the result before it can
+         * find the id — which is why `SendResult.providerMessageId` exists.
+         */
+        providerMessageId: result.messageId,
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
