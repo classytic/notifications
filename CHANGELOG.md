@@ -2,6 +2,27 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.5.0] — 2026-08-26
+
+### Fixed — send-failure log now walks the `cause` chain
+
+A real incident — `"Unsupported state or unable to authenticate data"` logged six
+times per order with no frame, no layer — took an afternoon to trace because the
+delivery log and the logger both recorded only `err.message`. Several components in
+the path decrypt something, so the message fit all of them equally.
+
+The fix splits the two concerns:
+
+- **`result.error`** (persisted, operator-facing) — still the bare message. A stack
+  in an audit record is noise; raw vendor text in a persisted field violates the
+  house rule on normalised stored errors.
+- **`logger.error`** — now walks the `cause` chain (up to depth 4) and appends the
+  first four stack frames of each `Error` node. An adapter that wraps a provider
+  error puts the real origin in `cause`; printing only the outer message hid the
+  layer you actually needed.
+
+The split is covered by `tests/send-failure-diagnostics.test.ts`.
+
 ## [2.4.0] - 2026-08-17
 
 ### Fixed — `providerMessageId` now works the way 2.3.0 claimed

@@ -539,7 +539,34 @@ export class NotificationService {
         return { ...r, duration: Date.now() - start };
       }
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`[${channel.name}] Failed: ${message}`);
+      /**
+       * Log the ORIGIN, persist only the message.
+       *
+       * The returned `error` string is what ends up in the delivery log, which
+       * is an operator-facing audit record — a raw stack there would be noise
+       * at best and leak vendor internals at worst. But a bare message is not
+       * diagnosable either: `"Unsupported state or unable to authenticate
+       * data"` (Node's AES-GCM failure) took an afternoon to trace precisely
+       * because the delivery row recorded that string and nothing else — no
+       * frame, no cause, no indication of which of several decrypting layers
+       * produced it, and the message never reached a log at all beyond this
+       * one line.
+       *
+       * So the split follows the house rule: normalise what is stored, and log
+       * the detail separately. `cause` is walked because an adapter that wraps
+       * a provider error puts the real origin there, and printing only the
+       * outer message hides exactly the layer you need.
+       */
+      const detail: string[] = [];
+      let cursor: unknown = err;
+      for (let depth = 0; cursor instanceof Error && depth < 4; depth++) {
+        detail.push(
+          `${depth === 0 ? 'error' : `cause[${depth}]`}: ${cursor.name}: ${cursor.message}` +
+            (cursor.stack ? `\n${cursor.stack.split('\n').slice(1, 5).join('\n')}` : ''),
+        );
+        cursor = (cursor as { cause?: unknown }).cause;
+      }
+      this.logger.error(`[${channel.name}] Failed: ${message}\n${detail.join('\n')}`);
       return {
         status: 'failed',
         channel: channel.name,
