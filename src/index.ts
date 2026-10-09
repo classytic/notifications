@@ -6,7 +6,7 @@
  * Zero required dependencies - bring your own providers.
  *
  * v2: Rate limiting, delivery tracking, queue adapter,
- * BCC batching, template engines, SMS & push channels.
+ * BCC batching, template engines, SMS, push and Telegram channels.
  *
  * @module @classytic/notifications
  * @author Classytic (https://github.com/classytic)
@@ -59,6 +59,7 @@ export { WebhookChannel } from './channels/webhook.channel.js';
 export { ConsoleChannel } from './channels/console.channel.js';
 export { SmsChannel } from './channels/sms.channel.js';
 export { PushChannel } from './channels/push.channel.js';
+export { TelegramChannel } from './channels/telegram.channel.js';
 
 // Utilities
 export { mergeHooks } from './utils/merge-hooks.js';
@@ -124,6 +125,9 @@ export type {
   // Push
   PushChannelConfig,
   PushProvider,
+
+  // Telegram
+  TelegramChannelConfig,
 
   // Templates
   TemplateResult,

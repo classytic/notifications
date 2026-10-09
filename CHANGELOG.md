@@ -2,6 +2,21 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.6.0] — 2026-10-09
+
+### Added — `TelegramChannel`
+
+A Bot API channel over native `fetch`, no dependency. Sends to `recipient.telegramChatId`
+(new optional field on `Recipient`), else the channel's default `chatId`. Text comes from
+`data.text` / `data.message` / `data.subject`, like `SmsChannel`, with the same `canSend`
+pre-check, so a payload with no destination or no text is skipped before it spends a
+rate-limit token.
+
+Failures are classified: a Bot API refusal (bad token, unknown chat, bot removed) returns
+`failed` with `retryable: false`; 429, 5xx and network errors throw a `ChannelError`, which
+the service retries. The token is part of the request URL, so no error message includes the
+URL. `providerMessageId` is Telegram's `message_id`.
+
 ## [2.5.0] — 2026-08-26
 
 ### Fixed — send-failure log now walks the `cause` chain

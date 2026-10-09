@@ -236,6 +236,26 @@ const snsSms = new SmsChannel({
 });
 ```
 
+### TelegramChannel
+
+Bot API over `fetch`, no SDK. Messages go to `recipient.telegramChatId`, else the channel's
+default `chatId` (usually a team group), so it suits a team's own alerts.
+
+```typescript
+import { TelegramChannel } from '@classytic/notifications/channels';
+
+new TelegramChannel({
+  botToken: process.env.TELEGRAM_BOT_TOKEN!, // from @BotFather
+  chatId: process.env.TELEGRAM_CHAT_ID!,     // e.g. -1001234567890 for a group
+  events: ['order.placed'],
+  parseMode: 'HTML',                         // optional
+});
+```
+
+Text comes from `data.text`, `data.message` or `data.subject`. A refusal (bad token,
+unknown chat, bot removed from the group) fails without retry; a rate limit, a server
+error or a network failure is retried. The token never appears in an error.
+
 ### PushChannel (BYOP)
 
 Zero dependencies — bring your own push SDK.

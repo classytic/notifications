@@ -17,6 +17,8 @@ export interface Recipient {
   phone?: string;
   name?: string;
   deviceToken?: string;
+  /** Telegram chat id (numeric, or `@channelname`) — `TelegramChannel`'s destination. */
+  telegramChatId?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -274,6 +276,26 @@ export interface WebhookChannelConfig extends ChannelConfig {
   method?: 'POST' | 'PUT';
   /** Request timeout in ms (default: 10000) */
   timeout?: number;
+}
+
+// ============================================================================
+// Telegram Channel Types
+// ============================================================================
+
+/** TelegramChannel configuration — Bot API, no SDK. */
+export interface TelegramChannelConfig extends ChannelConfig {
+  /** The bot's token from @BotFather. Secret: it never appears in an error. */
+  botToken: string;
+  /** Default chat (a group id like `-1001234567890`, or `@channel`) when the recipient has none. */
+  chatId?: string;
+  /** Telegram formatting for `text`. Omit for plain text. */
+  parseMode?: 'HTML' | 'MarkdownV2';
+  /** Deliver without a notification sound. */
+  silent?: boolean;
+  /** Request timeout in ms (default: 10000) */
+  timeout?: number;
+  /** Bot API origin (default `https://api.telegram.org`); for a local Bot API server or tests. */
+  apiBaseUrl?: string;
 }
 
 // ============================================================================
