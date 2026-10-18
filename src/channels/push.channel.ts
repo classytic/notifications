@@ -115,6 +115,12 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
       return { status: 'skipped', channel: this.name, error: 'No title or body (data.title, data.body)' };
     }
 
+    // Delivery hints (only when well-typed; a provider that ignores them still delivers).
+    const collapseKey = typeof data.collapseKey === 'string' && data.collapseKey ? data.collapseKey : undefined;
+    const threadId = typeof data.threadId === 'string' && data.threadId ? data.threadId : undefined;
+    const badge =
+      typeof data.badge === 'number' && Number.isInteger(data.badge) && data.badge >= 0 ? data.badge : undefined;
+
     try {
       const result = await this.provider.send({
         token: recipient.deviceToken,
@@ -122,6 +128,9 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
         body,
         data: data.pushData as Record<string, string>,
         imageUrl: data.imageUrl as string,
+        ...(collapseKey !== undefined ? { collapseKey } : {}),
+        ...(threadId !== undefined ? { threadId } : {}),
+        ...(badge !== undefined ? { badge } : {}),
       });
 
       return {
@@ -147,6 +156,10 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // A permanent provider failure (e.g. dead device token): fail without retries.
+      if ((err as { retryable?: unknown } | null)?.retryable === false) {
+        return { status: 'failed', channel: this.name, error: message, retryable: false };
+      }
       throw new ChannelError(this.name, message, err instanceof Error ? err : undefined);
     }
   }

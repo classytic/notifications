@@ -2,6 +2,51 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.7.0] — 2026-10-18
+
+### Added — push delivery hints: `collapseKey`, `threadId`, `badge`
+
+`PushProvider.send` receives three optional fields, read by `PushChannel` from the payload data
+(`data.collapseKey`, `data.threadId`, `data.badge`): a replace-in-place key (a newer push with the
+same key replaces the older one instead of stacking; FCM `android.collapseKey` + `notification.tag`,
+APNs `apns-collapse-id`), a tray grouping id (APNs `thread-id`), and the app badge count. Only
+well-typed values are forwarded (non-empty strings, a non-negative integer badge). Additive:
+providers that ignore them deliver as before.
+
+### Added — atomic idempotency claims + `RedisIdempotencyStore`
+
+`IdempotencyStore` gains an optional `claim(key, leaseMs)` / `release(key)` pair. When the
+store has it, `NotificationService` claims the key before delivery instead of `has()`, so
+concurrent or redelivered sends with the same `idempotencyKey` deliver once, across
+processes. Success upgrades the claim to the full `ttl`; zero sent (or a thrown pipeline
+error) releases it so a retry can deliver. New `idempotency.leaseMs` (default 5 min) bounds
+how long a crashed sender holds a key. `MemoryIdempotencyStore` implements the pair, so
+in-process concurrent duplicates are now also deduplicated. Stores without `claim` keep
+the old `has` / `set` behaviour.
+
+`RedisIdempotencyStore({ client, prefix? })` is `SET NX PX` over a structurally typed
+client (`RedisIdempotencyClient`); ioredis fits as is, no Redis dependency.
+
+### Added — `PermanentDeliveryError` for push providers
+
+A `PushProvider` can throw `PermanentDeliveryError` (or any error with `retryable: false`) for a
+failure no retry fixes, such as an unregistered device token. `PushChannel` then returns `failed`
+with `retryable: false` instead of throwing a `ChannelError`.
+
+### Fixed — `retryable: false` results were still retried
+
+The service turned a non-retryable result into a sentinel error, but `withRetry` retried every
+error, so a hard failure still used all `maxAttempts` (with backoff) before being reported.
+`withRetry` takes an optional `shouldRetry(error)` (additive fourth argument) and the service
+uses it, so non-retryable results stop after the first attempt.
+
+### Fixed — channels assignable to `Channel` under `exactOptionalPropertyTypes`
+
+`Channel.rateLimit` / `Channel.retry` are now `?: T | undefined`, matching `BaseChannel`'s
+getters. Strict hosts no longer need `as Channel` on `new PushChannel(...)` (or any built-in
+channel). Guarded by `tests/types/channel-contract.ts`, compiled with
+`exactOptionalPropertyTypes: true` against the built declarations in `npm run typecheck`.
+
 ## [2.6.0] — 2026-10-09
 
 ### Added — `TelegramChannel`

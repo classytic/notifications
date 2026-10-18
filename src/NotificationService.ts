@@ -50,7 +50,7 @@ import { Emitter } from './utils/emitter.js';
 import { withRetry, resolveRetryConfig } from './utils/retry.js';
 import { NotificationError } from './utils/errors.js';
 import { isQuietHours } from './utils/quiet-hours.js';
-import { MemoryIdempotencyStore, IDEMPOTENCY_DEFAULT_TTL } from './utils/idempotency.js';
+import { MemoryIdempotencyStore, IDEMPOTENCY_DEFAULT_TTL, IDEMPOTENCY_DEFAULT_LEASE } from './utils/idempotency.js';
 import { MemoryRateLimitStore } from './utils/rate-limiter.js';
 import { pMap } from './utils/concurrency.js';
 import type { IdempotencyStore } from './utils/idempotency.js';
@@ -93,6 +93,7 @@ export class NotificationService {
   private emitter = new Emitter();
   private idempotencyStore?: IdempotencyStore;
   private idempotencyTtl: number;
+  private idempotencyLease: number;
   private deliveryLog?: DeliveryLog;
   private rateLimitStore?: RateLimitStore;
   private queueAdapter?: QueueAdapter;
@@ -112,6 +113,7 @@ export class NotificationService {
     } else {
       this.idempotencyTtl = IDEMPOTENCY_DEFAULT_TTL;
     }
+    this.idempotencyLease = config.idempotency?.leaseMs ?? IDEMPOTENCY_DEFAULT_LEASE;
 
     // Delivery log
     this.deliveryLog = config.deliveryLog;
@@ -270,9 +272,14 @@ export class NotificationService {
     // 1. Lifecycle: before
     await this.emitter.emit('before:send', payload);
 
-    // 1b. Idempotency check
+    // 1b. Idempotency check (atomic claim when the store supports it: one
+    // delivery per key across processes; released again if nothing was sent)
+    let claimed = false;
     if (payload.idempotencyKey && this.idempotencyStore) {
-      const seen = await this.idempotencyStore.has(payload.idempotencyKey);
+      const store = this.idempotencyStore;
+      const seen = store.claim
+        ? !(claimed = await store.claim(payload.idempotencyKey, this.idempotencyLease))
+        : await store.has(payload.idempotencyKey);
       if (seen) {
         this.logger.debug?.(`Duplicate notification skipped (key: ${payload.idempotencyKey})`);
         return this.finalize(payload, {
@@ -286,6 +293,27 @@ export class NotificationService {
       }
     }
 
+    if (!claimed) return this.deliver(payload, start);
+    let delivered: DispatchResult | undefined;
+    try {
+      delivered = await this.deliver(payload, start);
+      return delivered;
+    } finally {
+      if (!delivered || delivered.sent === 0) await this.releaseIdempotency(payload.idempotencyKey!);
+    }
+  }
+
+  /** Drop a claimed idempotency key so a later retry can deliver. Never throws. */
+  private async releaseIdempotency(key: string): Promise<void> {
+    try {
+      await this.idempotencyStore?.release?.(key);
+    } catch (err) {
+      this.logger.warn(`Idempotency store error: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** Steps 2-5 of the send pipeline: template, channel filter, preferences, delivery. */
+  private async deliver(payload: NotificationPayload, start: number): Promise<DispatchResult> {
     // 2. Resolve template
     let enrichedPayload = payload;
     if (payload.template && this.templateResolver) {
@@ -529,6 +557,7 @@ export class NotificationService {
             this.logger.error(`[${channel.name}] send:retry listener error: ${emitErr instanceof Error ? emitErr.message : emitErr}`);
           });
         },
+        error => !(NON_RETRYABLE in error),
       );
 
       return { ...result, duration: Date.now() - start };

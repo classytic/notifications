@@ -571,3 +571,22 @@ describe('pMap', () => {
     ).rejects.toThrow('positive integer');
   });
 });
+
+describe('withRetry shouldRetry', () => {
+  it('stops at once when shouldRetry returns false', async () => {
+    let calls = 0;
+    const permanent = Object.assign(new Error('permanent'), { permanent: true });
+    await expect(
+      withRetry(
+        async () => {
+          calls++;
+          throw permanent;
+        },
+        resolveRetryConfig({ maxAttempts: 5, backoff: 'fixed', initialDelay: 1 }),
+        undefined,
+        (e) => !('permanent' in e),
+      ),
+    ).rejects.toBe(permanent);
+    expect(calls).toBe(1);
+  });
+});

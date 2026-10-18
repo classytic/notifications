@@ -1,6 +1,6 @@
 {
   "name": "@classytic/notifications",
-  "version": "2.6.0",
+  "version": "2.7.0",
   "description": "Multi-channel notifications (Email, SMS, Push, Webhook, Telegram) with rate limiting, delivery tracking, queue adapters, channel fallback, templates, retry — zero required dependencies",
   "type": "module",
   "sideEffects": false,
@@ -95,7 +95,8 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:live": "vitest run --config vitest.live.config.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && npm run typecheck:consumer",
+    "typecheck:consumer": "tsdown --logLevel warn && tsc --noEmit -p tsconfig.types.json",
     "prepublishOnly": "npm run build && npm run typecheck && npm test",
     "push": "classytic-push",
     "publish:dry": "npm publish --dry-run --access public",
@@ -106,13 +107,13 @@
     "release:major": "npm version major && npm run release"
   },
   "devDependencies": {
-    "@classytic/dev-tools": "^0.2.0",
-    "@types/node": "^22.0.0",
-    "@types/nodemailer": "^8.0.0",
-    "@vitest/coverage-v8": "4.1.8",
-    "nodemailer": "^8.0.10",
-    "tsdown": "^0.22.14",
-    "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "@classytic/dev-tools": "^0.2.1",
+    "@types/node": "^26.6.5",
+    "@types/nodemailer": "^8.0.2",
+    "@vitest/coverage-v8": "5.0.5",
+    "nodemailer": "^10.1.2",
+    "tsdown": "^0.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
   }
 }

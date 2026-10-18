@@ -609,20 +609,30 @@ await notifications.send({
 });
 ```
 
-For distributed systems, implement `IdempotencyStore` with Redis:
+For multiple processes or replicas use the built-in `RedisIdempotencyStore`. It
+claims each key atomically (`SET key 1 PX lease NX`) before delivery, so a redelivered
+event sends once across restarts and replicas. On success the key gets the full `ttl`;
+if nothing was sent (or the pipeline threw) the claim is released so a retry can deliver.
+A crashed sender holds the key only for `leaseMs`. The client is typed structurally
+(no Redis dependency): ioredis fits as is.
 
 ```typescript
-import type { IdempotencyStore } from '@classytic/notifications/utils';
+import { Redis } from 'ioredis';
+import { NotificationService, RedisIdempotencyStore } from '@classytic/notifications';
 
-class RedisIdempotencyStore implements IdempotencyStore {
-  async has(key: string): Promise<boolean> {
-    return !!(await redis.exists(`idemp:${key}`));
-  }
-  async set(key: string, ttlMs: number): Promise<void> {
-    await redis.set(`idemp:${key}`, '1', 'PX', ttlMs);
-  }
-}
+const notifications = new NotificationService({
+  channels: [...],
+  idempotency: {
+    store: new RedisIdempotencyStore({ client: new Redis(process.env.REDIS_URL!), prefix: 'notif:idem:' }),
+    ttl: 24 * 60 * 60 * 1000, // remembered after a successful send
+    leaseMs: 5 * 60 * 1000,   // in-flight claim (default)
+  },
+});
 ```
+
+A custom `IdempotencyStore` gets the same guarantee by implementing the optional
+`claim(key, leaseMs)` / `release(key)` pair; stores with only `has` / `set` keep the
+previous check-then-record behaviour (fine in one process, racy across several).
 
 ## Batch Sending
 
@@ -709,7 +719,7 @@ emitter.on('user.created', hooks['user.created'][0]);
 | `RateLimitStore` | Rate limit state | `MemoryRateLimitStore` |
 | `DeliveryLog` | Audit trail | `MemoryDeliveryLog` |
 | `QueueAdapter` | Crash-resilient queue | `MemoryQueue` |
-| `IdempotencyStore` | Deduplication | `MemoryIdempotencyStore` |
+| `IdempotencyStore` | Deduplication | `MemoryIdempotencyStore` (`RedisIdempotencyStore` for multi-process) |
 | `PreferenceResolver` | User preference filtering | — (BYOP) |
 
 ### Exports

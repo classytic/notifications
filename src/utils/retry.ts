@@ -56,6 +56,8 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   config: ResolvedRetryConfig,
   onRetry?: (attempt: number, error: Error) => void,
+  /** Return `false` to stop retrying and rethrow this error at once. Default: retry everything. */
+  shouldRetry?: (error: Error) => boolean,
 ): Promise<T> {
   let lastError: Error | undefined;
 
@@ -65,7 +67,7 @@ export async function withRetry<T>(
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
 
-      if (attempt === config.maxAttempts) break;
+      if (attempt === config.maxAttempts || shouldRetry?.(lastError) === false) break;
 
       const delay = calculateDelay(attempt, config);
       onRetry?.(attempt, lastError);

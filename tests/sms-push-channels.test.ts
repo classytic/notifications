@@ -273,3 +273,46 @@ describe('PushChannel', () => {
     expect(ch.name).toBe('push');
   });
 });
+
+describe('PushChannel: permanent provider failures', () => {
+  it('a PermanentDeliveryError fails once with retryable:false (no retries)', async () => {
+    const { PermanentDeliveryError } = await import('../src/utils/errors.js');
+    const { NotificationService } = await import('../src/NotificationService.js');
+    const { PushChannel } = await import('../src/channels/push.channel.js');
+    let calls = 0;
+    const channel = new PushChannel({
+      provider: {
+        async send() {
+          calls++;
+          throw new PermanentDeliveryError('apns 410 Unregistered', { code: 'Unregistered' });
+        },
+      },
+    });
+    const service = new NotificationService({ channels: [channel], retry: { maxAttempts: 3, backoff: 'fixed', initialDelay: 1 } });
+    const result = await service.send({ event: 'e', recipient: { deviceToken: 't' }, data: { title: 'x' } });
+    expect(calls).toBe(1);
+    expect(result.results[0]).toMatchObject({ status: 'failed', retryable: false, error: 'apns 410 Unregistered' });
+  });
+
+  it('any error flagged retryable:false is permanent; other errors are retried', async () => {
+    const { NotificationService } = await import('../src/NotificationService.js');
+    const { PushChannel } = await import('../src/channels/push.channel.js');
+    let permanent = 0;
+    let transient = 0;
+    const svc = (send: () => Promise<{ messageId: string }>) =>
+      new NotificationService({
+        channels: [new PushChannel({ provider: { send } })],
+        retry: { maxAttempts: 3, backoff: 'fixed', initialDelay: 1 },
+      });
+    await svc(async () => {
+      permanent++;
+      throw Object.assign(new Error('dead'), { retryable: false });
+    }).send({ event: 'e', recipient: { deviceToken: 't' }, data: { title: 'x' } });
+    await svc(async () => {
+      transient++;
+      throw new Error('503');
+    }).send({ event: 'e', recipient: { deviceToken: 't' }, data: { title: 'x' } });
+    expect(permanent).toBe(1);
+    expect(transient).toBe(3);
+  });
+});

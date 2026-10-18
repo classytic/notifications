@@ -66,10 +66,13 @@ export { mergeHooks } from './utils/merge-hooks.js';
 export { withRetry, resolveRetryConfig, calculateDelay } from './utils/retry.js';
 export { Emitter } from './utils/emitter.js';
 export { NotificationError, ChannelError, ProviderNotInstalledError } from './utils/errors.js';
+export { PermanentDeliveryError } from './utils/errors.js';
 export { isQuietHours } from './utils/quiet-hours.js';
 export type { QuietHoursConfig } from './utils/quiet-hours.js';
 export { MemoryIdempotencyStore, IDEMPOTENCY_DEFAULT_TTL } from './utils/idempotency.js';
 export type { IdempotencyStore } from './utils/idempotency.js';
+export { RedisIdempotencyStore, IDEMPOTENCY_DEFAULT_LEASE } from './utils/idempotency.js';
+export type { RedisIdempotencyClient } from './utils/idempotency.js';
 export { pMap } from './utils/concurrency.js';
 export type { PMapOptions } from './utils/concurrency.js';
 

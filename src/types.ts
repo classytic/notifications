@@ -161,13 +161,13 @@ export interface Channel {
    * implement `Channel` directly should surface it here so the service
    * applies the limit (otherwise the channel is treated as unlimited).
    */
-  readonly rateLimit?: import('./utils/rate-limiter.js').RateLimitConfig;
+  readonly rateLimit?: import('./utils/rate-limiter.js').RateLimitConfig | undefined;
   /**
    * Optional per-channel retry override, read by the service. When unset the
    * service's global retry config applies. `BaseChannel` exposes this from
    * `config.retry`.
    */
-  readonly retry?: RetryConfig;
+  readonly retry?: RetryConfig | undefined;
   shouldHandle(event: string): boolean;
   send(payload: NotificationPayload): Promise<SendResult>;
   /**
@@ -319,7 +319,11 @@ export interface SmsChannelConfig extends ChannelConfig {
 // Push Notification Channel Types
 // ============================================================================
 
-/** Push notification provider interface (FCM or custom) */
+/**
+ * Push notification provider interface (FCM or custom). Throw to fail the send (retried per
+ * the retry config); throw a `PermanentDeliveryError` (or any error with `retryable: false`)
+ * for a failure no retry can fix, such as an unregistered device token.
+ */
 export interface PushProvider {
   send(message: {
     token: string;
@@ -327,6 +331,16 @@ export interface PushProvider {
     body: string;
     data?: Record<string, string>;
     imageUrl?: string;
+    /**
+     * Replace-in-place key: a newer push with the same key replaces the older one on the device
+     * instead of stacking (FCM `android.collapseKey` + `notification.tag`, APNs `apns-collapse-id`,
+     * at most 64 bytes). From `data.collapseKey`. Absent = every push shows on its own.
+     */
+    collapseKey?: string;
+    /** Groups notifications in the tray (APNs `aps.thread-id`, Android group). From `data.threadId`. */
+    threadId?: string;
+    /** App icon badge count (APNs `aps.badge`, Android `notificationCount`). From `data.badge`. */
+    badge?: number;
   }): Promise<{ messageId: string }>;
 }
 
@@ -442,6 +456,8 @@ export interface NotificationServiceConfig {
     store?: import('./utils/idempotency.js').IdempotencyStore;
     /** TTL in milliseconds (default: 86400000 = 24h) */
     ttl?: number;
+    /** In-flight lease for stores with an atomic `claim()` (default: 300000 = 5 min) */
+    leaseMs?: number;
   };
   /** Delivery log for audit trail — records every send attempt */
   deliveryLog?: import('./utils/delivery-log.js').DeliveryLog;
