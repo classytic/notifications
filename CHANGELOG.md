@@ -2,6 +2,30 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.8.0] — 2026-11-09
+
+### Added: custom SMTP without authentication, and `requireTLS`
+
+An IP-allow-listed relay (an enterprise mail gateway that accepts mail from known addresses and takes
+no SMTP AUTH) could not be configured: `buildEmailTransport` always required `user` and `password`.
+
+- `EmailPreset.authOptional` (set on `smtp` only). For such a preset, `user` and `password` both blank
+  (absent, empty or whitespace) builds the transport without `auth`. One without the other still
+  throws the same "SMTP user is required" / "Password is required" error. Every other preset keeps
+  requiring its key.
+- `EmailCredentialData.requireTLS?: string | boolean` (boolean or the form strings `'true'` / `'false'`,
+  like `secure`; blank leaves it unset): passed to nodemailer as `requireTLS`, so the transport refuses
+  to send unless STARTTLS succeeds. Read only where the host may be overridden (`smtp`, `ses`).
+- `getEmailCredentialSchema()` adds an optional `requireTLS` select; the `user` and `password`
+  descriptions say a relay may leave both blank.
+
+Additive: a credential that worked before builds the same transport (no `requireTLS` key unless set).
+Pinned by `tests/providers.email.auth-optional.test.ts` (including `testEmailCredential` against a fake
+SMTP server: no `AUTH` command; `requireTLS` with no STARTTLS offered fails verification).
+
+FLOW OCC adoption: `@spinekit/integrations`' email provider passes `requireTLS` through and lets the
+administrator leave both fields blank for FLOW ICT's allow-listed relay (gap G-W1-INT-4).
+
 ## [2.7.0] — 2026-10-18
 
 ### Added — push delivery hints: `collapseKey`, `threadId`, `badge`

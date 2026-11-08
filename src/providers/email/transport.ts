@@ -3,7 +3,8 @@
  *
  * Dispatches on `data.provider` to the matching preset, then layers
  * user-supplied fields (apiKey / user / password) on top. For
- * `provider: 'smtp'` the host/port/secure tuple is also user-supplied.
+ * `provider: 'smtp'` the host/port/secure/requireTLS tuple is also
+ * user-supplied, and user and password may both be blank (no `auth`).
  *
  * `nodemailer` is an optional peer dependency — the import is dynamic
  * so callers who never reach `buildEmailTransport()` don't pay the
@@ -33,6 +34,23 @@ export interface EmailCredentialData {
   host?: string;
   port?: string | number;
   secure?: string | boolean;
+  /**
+   * Refuse to send unless STARTTLS succeeds (nodemailer `requireTLS`).
+   * Boolean or the form strings `'true'` / `'false'`; blank leaves it
+   * unset. Read only where the host may be overridden (`smtp`, `ses`).
+   */
+  requireTLS?: string | boolean;
+}
+
+function isBlank(value: string | undefined): boolean {
+  return value === undefined || value === null || String(value).trim() === '';
+}
+
+/** Boolean, or the form strings `'true'` / `'false'`; blank is `undefined`. */
+function readFlag(value: string | boolean | undefined): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string' && value.trim() !== '') return value.trim() === 'true';
+  return undefined;
 }
 
 function resolveUser(data: EmailCredentialData, userSource: string): string {
@@ -107,6 +125,24 @@ export async function buildEmailTransport(
     }
   }
 
+  const requireTLS = allowOverride ? readFlag(data.requireTLS) : undefined;
+
+  // A relay that takes no SMTP AUTH (allow-listed by address): only for
+  // presets that opt in (custom SMTP), and only when BOTH user and
+  // password are blank. One without the other falls through to the
+  // resolvers below, which name the missing half.
+  const noAuth =
+    preset.authOptional === true &&
+    preset.userSource === 'user' &&
+    isBlank(data.user) &&
+    isBlank(preset.passSource === 'apiKey' ? data.apiKey : data.password);
+  const auth = noAuth
+    ? undefined
+    : {
+        user: resolveUser(data, preset.userSource),
+        pass: resolvePass(data, preset.passSource),
+      };
+
   let nodemailer: typeof import('nodemailer');
   try {
     nodemailer = await import('nodemailer');
@@ -124,10 +160,8 @@ export async function buildEmailTransport(
     host,
     port,
     secure,
-    auth: {
-      user: resolveUser(data, preset.userSource),
-      pass: resolvePass(data, preset.passSource),
-    },
+    ...(requireTLS !== undefined ? { requireTLS } : {}),
+    ...(auth ? { auth } : {}),
   });
 }
 

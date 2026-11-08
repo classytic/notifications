@@ -71,7 +71,8 @@ export function getEmailCredentialSchema(): EmailCredentialField[] {
       displayName: 'SMTP Username',
       type: 'text',
       required: false,
-      description: 'Gmail address, Mailgun SMTP user, or custom SMTP user.',
+      description:
+        'Gmail address, Mailgun SMTP user, or custom SMTP user. Custom SMTP: leave user and password both blank for a relay that accepts mail without authentication.',
     },
     {
       name: 'password',
@@ -79,7 +80,7 @@ export function getEmailCredentialSchema(): EmailCredentialField[] {
       type: 'password',
       required: false,
       description:
-        'Gmail app password, Mailgun SMTP password, or custom SMTP password.',
+        'Gmail app password, Mailgun SMTP password, or custom SMTP password. Custom SMTP: leave both blank for a relay without authentication.',
     },
     {
       name: 'host',
@@ -107,6 +108,17 @@ export function getEmailCredentialSchema(): EmailCredentialField[] {
         { value: 'false', label: 'false (port 587 / STARTTLS)' },
       ],
       description: 'Custom SMTP only.',
+    },
+    {
+      name: 'requireTLS',
+      displayName: 'Require STARTTLS',
+      type: 'select',
+      required: false,
+      options: [
+        { value: 'true', label: 'true (refuse to send without STARTTLS)' },
+        { value: 'false', label: 'false (use STARTTLS when offered)' },
+      ],
+      description: 'Custom SMTP only. With Secure false, refuse to send unless the relay upgrades to TLS.',
     },
   ];
 }

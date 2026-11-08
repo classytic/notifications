@@ -183,11 +183,29 @@ const channel = new EmailChannel({
 | `sendgrid` | `smtp.sendgrid.net:587` | `apiKey` | User is the literal `apikey` |
 | `mailgun` | `smtp.mailgun.org:465` | `user`, `password` | Per-domain SMTP creds |
 | `ses` | `email-smtp.us-east-1.amazonaws.com:465` | `user`, `password` | SES IAM SMTP creds. Override `host` for other regions |
-| `smtp` | user-supplied | `host`, `port`, `secure`, `user`, `password` | Any auth-SMTP server |
+| `smtp` | user-supplied | `host`, `port`, `secure`, `requireTLS`, `user`, `password` | Any SMTP server. Leave `user` and `password` both blank for a relay without auth (IP allow-listed) |
 
 Host override is allowed only for `smtp` and `ses` (regional). Other
 presets pin the host to prevent footguns like "I changed the host but
 kept the Resend API key".
+
+`requireTLS` (boolean or `'true'` / `'false'`, `smtp` and `ses` only)
+makes the transport refuse to send unless STARTTLS succeeds. Custom SMTP
+with `user` and `password` both blank builds a transport without `auth`
+(a relay that allow-lists the sender by address); one without the other
+still throws.
+
+```typescript
+// Enterprise relay, allow-listed by IP, STARTTLS required
+await buildEmailTransport({
+  provider: 'smtp',
+  fromEmail: 'alerts@corp.example',
+  host: 'relay.corp.example',
+  port: 25,
+  secure: false,
+  requireTLS: true,
+});
+```
 
 ```typescript
 // SES in eu-west-1

@@ -51,6 +51,13 @@ export interface EmailPreset {
    * — prevents "changed host, kept the Resend key" footguns.
    */
   allowHostOverride?: boolean;
+  /**
+   * `true` when the relay may take no SMTP AUTH: with BOTH `user` and
+   * `password` blank the transport is built without `auth` (an
+   * IP-allow-listed relay). One without the other is still an error.
+   * Only custom SMTP sets it; every preset keeps requiring its key.
+   */
+  authOptional?: boolean;
   /** Setup instructions surfaced in the Integrations UI. */
   setupHint: string;
 }
@@ -120,8 +127,9 @@ export const EMAIL_PRESETS: Record<EmailProviderName, EmailPreset> = {
     secure: false,
     userSource: 'user',
     passSource: 'password',
+    authOptional: true,
     setupHint:
-      'Use for SMTP servers without a preset. Standard auth-SMTP only — no OAuth-XOAUTH2.',
+      'Use for SMTP servers without a preset. Standard auth-SMTP only — no OAuth-XOAUTH2. For a relay that accepts mail from allow-listed addresses without authentication, leave user and password both blank.',
   },
 };
 

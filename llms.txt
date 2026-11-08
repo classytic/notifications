@@ -1,0 +1,26 @@
+# @classytic/notifications
+
+Multi-channel delivery layer (email, SMS, push, webhook, Telegram) with retry, idempotency, rate limits, delivery log, queue. Skill: skills/notifications/SKILL.md.
+Rule engines, in-app feeds and approval inboxes are in skill arc-notifications.
+
+| Need | Use |
+|---|---|
+| Send an event to several channels | `NotificationService` (`send`, `sendBatch`) |
+| SMTP email | `EmailChannel` from `@classytic/notifications/channels` |
+| Email from stored credentials (Resend, Gmail, SendGrid, Mailgun, SES, SMTP) | `buildEmailTransport` from `@classytic/notifications/providers` |
+| Credential form fields and connection test | `getEmailCredentialSchema`, `testEmailCredential` |
+| SMS or push | `SmsChannel`, `PushChannel` with your provider object |
+| Signed webhook | `WebhookChannel` |
+| Telegram message | `TelegramChannel` |
+| New channel type | `BaseChannel` |
+| No retry for permanent failures | `PermanentDeliveryError` |
+| Exactly once across processes | `idempotencyKey` with `RedisIdempotencyStore` |
+| Audit trail | `deliveryLog` (`MemoryDeliveryLog`, or your DeliveryLog) |
+| Queue and delayed sends | `queue` (`MemoryQueue`), payload `delay` |
+| Templates | `createSimpleResolver` |
+| Channel fallback order | `withFallback` |
+| Provider delivery receipts | `createStatusHandler` |
+| Quiet hours and opt-outs | `preferences` resolver, `isQuietHours` |
+| Bind domain events to sends | `service.createHooks`, `mergeHooks` |
+
+Details: references/channels-providers.md, references/service-features.md.
