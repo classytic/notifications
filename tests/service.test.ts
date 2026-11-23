@@ -1113,7 +1113,19 @@ describe('NotificationService - Idempotency', () => {
     });
 
     await service.send(makePayload({ idempotencyKey: 'custom-store' }));
-    expect(store.has('custom-store')).toBe(true);
+    // 2.10: per-channel keys by default (`${key}:${channel}`).
+    expect(store.has('custom-store:mock')).toBe(true);
+    expect(store.has('custom-store')).toBe(false);
+  });
+
+  it("scope 'payload' keeps the 2.9 single key", async () => {
+    const store = new MemoryIdempotencyStore();
+    const service = new NotificationService({
+      channels: [new MockChannel()],
+      idempotency: { store, scope: 'payload' },
+    });
+    await service.send(makePayload({ idempotencyKey: 'legacy' }));
+    expect(store.has('legacy')).toBe(true);
   });
 
   it('uses custom TTL', async () => {
@@ -1128,7 +1140,7 @@ describe('NotificationService - Idempotency', () => {
 
     await service.send(makePayload({ idempotencyKey: 'ttl-test' }));
 
-    expect(setSpy).toHaveBeenCalledWith('ttl-test', 5000);
+    expect(setSpy).toHaveBeenCalledWith('ttl-test:mock', 5000);
   });
 
   it('logs debug message on duplicate skip', async () => {

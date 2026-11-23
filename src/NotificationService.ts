@@ -94,6 +94,7 @@ export class NotificationService {
   private idempotencyStore?: IdempotencyStore;
   private idempotencyTtl: number;
   private idempotencyLease: number;
+  private idempotencyScope: 'channel' | 'payload';
   private deliveryLog?: DeliveryLog;
   private rateLimitStore?: RateLimitStore;
   private queueAdapter?: QueueAdapter;
@@ -114,6 +115,7 @@ export class NotificationService {
       this.idempotencyTtl = IDEMPOTENCY_DEFAULT_TTL;
     }
     this.idempotencyLease = config.idempotency?.leaseMs ?? IDEMPOTENCY_DEFAULT_LEASE;
+    this.idempotencyScope = config.idempotency?.scope ?? 'channel';
 
     // Delivery log
     this.deliveryLog = config.deliveryLog;
@@ -149,21 +151,26 @@ export class NotificationService {
       this.queueAdapter = config.queue;
       this.queueAdapter.process(async (payload) => {
         const dispatch = await this.sendDirect(payload);
-        // Signal failure to the queue adapter only when the entire
-        // dispatch failed (no channel sent). Partial success resolves
-        // normally — retrying would double-send the channels that
-        // already succeeded.
+        // Signal failure to the queue adapter when the entire dispatch failed (no channel sent).
+        // With per-channel idempotency (2.10, the default) a partial failure is signalled too
+        // when a failed channel is retryable: the re-run skips the channels already recorded as
+        // sent, so it cannot double-send them. Without a key (or with `scope: 'payload'`) a
+        // partial success resolves normally, as before: a re-run would duplicate the sent ones.
+        const perChannel = this.perChannelIdempotency(payload);
+        const retryableFailed = dispatch.results.filter((r) => r.status === 'failed' && r.retryable !== false);
+        const totalFailure = dispatch.sent === 0 && dispatch.failed > 0;
         if (
           this.queueFailureMode === 'throw-on-total-failure' &&
-          dispatch.sent === 0 &&
-          dispatch.failed > 0
+          (totalFailure || (perChannel && retryableFailed.length > 0))
         ) {
           const summary = dispatch.results
             .filter((r) => r.status === 'failed')
             .map((r) => `${r.channel}: ${r.error ?? 'unknown error'}`)
             .join('; ');
           throw new NotificationError(
-            `Queued dispatch for "${dispatch.event}" failed on every channel: ${summary || 'no detail'}`,
+            totalFailure
+              ? `Queued dispatch for "${dispatch.event}" failed on every channel: ${summary || 'no detail'}`
+              : `Queued dispatch for "${dispatch.event}" failed on some channels (retrying those only): ${summary}`,
             { code: 'QUEUE_DISPATCH_FAILED' },
           );
         }
@@ -272,7 +279,12 @@ export class NotificationService {
     // 1. Lifecycle: before
     await this.emitter.emit('before:send', payload);
 
-    // 1b. Idempotency check (atomic claim when the store supports it: one
+    // 1b. Per-channel idempotency (2.10 default): one key per (payload key, channel).
+    if (this.perChannelIdempotency(payload)) {
+      return this.deliverPerChannel(payload, start, payload.idempotencyKey!, this.idempotencyStore!);
+    }
+
+    // 1c. Payload-scoped idempotency check (`scope: 'payload'`, 2.9 behaviour; atomic claim when the store supports it: one
     // delivery per key across processes; released again if nothing was sent)
     let claimed = false;
     if (payload.idempotencyKey && this.idempotencyStore) {
@@ -303,6 +315,95 @@ export class NotificationService {
     }
   }
 
+  /** Per-channel keys apply: a key, a store, and `scope: 'channel'` (the default). */
+  private perChannelIdempotency(payload: NotificationPayload): boolean {
+    return Boolean(payload.idempotencyKey && this.idempotencyStore && this.idempotencyScope === 'channel');
+  }
+
+  /**
+   * Per-channel idempotency (G3 in arc-notifications' `docs/push-gaps-2026-11.md`; ADR 0001
+   * section 2 item 4 applied at the channel level). Each target channel is claimed under
+   * `${key}:${channel}` BEFORE the template is rendered, so a full duplicate stays as cheap as in
+   * 2.9. Channels already done are skipped (reported as `skipped`, error `duplicate`); the rest
+   * deliver. After delivery a channel that SENT records its key for the TTL; every other claim is
+   * released, so a redelivery (or the queue's retry) sends that channel, and only that channel,
+   * again. A pipeline error releases every claim it holds.
+   */
+  private async deliverPerChannel(
+    payload: NotificationPayload,
+    start: number,
+    key: string,
+    store: IdempotencyStore,
+  ): Promise<DispatchResult> {
+    let candidates = this.channels.filter((ch) => ch.shouldHandle(payload.event));
+    if (payload.channels?.length) {
+      const targetSet = new Set(payload.channels);
+      candidates = candidates.filter((ch) => targetSet.has(ch.name));
+    }
+    const keyOf = (name: string) => `${key}:${name}`;
+
+    const fresh: Channel[] = [];
+    const duplicates: Channel[] = [];
+    const held = new Set<string>();
+    const done = new Set<string>();
+    const releaseHeld = async () => {
+      for (const name of held) if (!done.has(name)) await this.releaseIdempotency(keyOf(name));
+    };
+
+    try {
+      for (const channel of candidates) {
+        const k = keyOf(channel.name);
+        const seen = store.claim
+          ? !(await store.claim(k, this.idempotencyLease))
+          : await store.has(k);
+        if (seen) {
+          duplicates.push(channel);
+          continue;
+        }
+        fresh.push(channel);
+        if (store.claim) held.add(channel.name);
+      }
+    } catch (err) {
+      await releaseHeld();
+      throw err;
+    }
+
+    if (candidates.length > 0 && fresh.length === 0) {
+      // Every target channel already delivered: the 2.9 duplicate shape (no channel results).
+      this.logger.debug?.(`Duplicate notification skipped (key: ${key})`);
+      return this.finalize(payload, {
+        event: payload.event,
+        results: [],
+        sent: 0,
+        failed: 0,
+        skipped: 1,
+        duration: Date.now() - start,
+      });
+    }
+
+    try {
+      return await this.deliver(payload, start, {
+        channels: fresh,
+        duplicates,
+        settle: async (results) => {
+          for (const r of results) {
+            if (r.status !== 'sent') continue;
+            // Marked done before the write: a failed write leaves the claim's lease in place
+            // (as 2.9 did) rather than releasing a key whose channel already delivered.
+            done.add(r.channel);
+            try {
+              await store.set(keyOf(r.channel), this.idempotencyTtl);
+            } catch (err) {
+              this.logger.warn(`Idempotency store error: ${err instanceof Error ? err.message : err}`);
+            }
+          }
+        },
+      });
+    } finally {
+      await releaseHeld();
+    }
+  }
+
   /** Drop a claimed idempotency key so a later retry can deliver. Never throws. */
   private async releaseIdempotency(key: string): Promise<void> {
     try {
@@ -313,7 +414,16 @@ export class NotificationService {
   }
 
   /** Steps 2-5 of the send pipeline: template, channel filter, preferences, delivery. */
-  private async deliver(payload: NotificationPayload, start: number): Promise<DispatchResult> {
+  private async deliver(
+    payload: NotificationPayload,
+    start: number,
+    /** Per-channel idempotency: the channels claimed, the duplicates, and the post-send hook. */
+    perChannel?: {
+      channels: Channel[];
+      duplicates: Channel[];
+      settle: (results: SendResult[]) => Promise<void>;
+    },
+  ): Promise<DispatchResult> {
     // 2. Resolve template
     let enrichedPayload = payload;
     if (payload.template && this.templateResolver) {
@@ -332,12 +442,16 @@ export class NotificationService {
       }
     }
 
-    // 3. Filter channels by event + optional target list
-    let activeChannels = this.channels.filter(ch => ch.shouldHandle(payload.event));
-
-    if (payload.channels?.length) {
-      const targetSet = new Set(payload.channels);
-      activeChannels = activeChannels.filter(ch => targetSet.has(ch.name));
+    // 3. Filter channels by event + optional target list (already done, and claimed, per channel)
+    let activeChannels: Channel[];
+    if (perChannel) {
+      activeChannels = perChannel.channels;
+    } else {
+      activeChannels = this.channels.filter(ch => ch.shouldHandle(payload.event));
+      if (payload.channels?.length) {
+        const targetSet = new Set(payload.channels);
+        activeChannels = activeChannels.filter(ch => targetSet.has(ch.name));
+      }
     }
 
     // 4. Apply preference filtering
@@ -400,9 +514,22 @@ export class NotificationService {
     }
 
     // 5. Send to all channels in parallel (with rate limit check)
-    const results: SendResult[] = await Promise.all(
+    const sentResults: SendResult[] = await Promise.all(
       activeChannels.map(channel => this.sendToChannel(channel, enrichedPayload)),
     );
+
+    let results = sentResults;
+    if (perChannel) {
+      await perChannel.settle(sentResults);
+      results = [
+        ...sentResults,
+        ...perChannel.duplicates.map((ch): SendResult => ({
+          status: 'skipped',
+          channel: ch.name,
+          error: 'duplicate (idempotency)',
+        })),
+      ];
+    }
 
     const dispatch: DispatchResult = {
       event: enrichedPayload.event,
@@ -413,8 +540,8 @@ export class NotificationService {
       duration: Date.now() - start,
     };
 
-    // Record idempotency key on successful delivery
-    if (payload.idempotencyKey && this.idempotencyStore && dispatch.sent > 0) {
+    // Record idempotency key on successful delivery (payload scope; per-channel keys were settled above)
+    if (!perChannel && payload.idempotencyKey && this.idempotencyStore && dispatch.sent > 0) {
       try {
         await this.idempotencyStore.set(payload.idempotencyKey, this.idempotencyTtl);
       } catch (err) {

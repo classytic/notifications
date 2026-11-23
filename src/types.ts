@@ -501,6 +501,22 @@ export interface NotificationServiceConfig {
     ttl?: number;
     /** In-flight lease for stores with an atomic `claim()` (default: 300000 = 5 min) */
     leaseMs?: number;
+    /**
+     * What one key deduplicates (2.10).
+     *
+     *   - `'channel'` (default since 2.10): the service claims `${idempotencyKey}:${channel.name}`
+     *     per channel and records it only for channels that SENT. A redelivery skips the channels
+     *     already done and retries the rest, so a failed push beside a delivered in-app row is not
+     *     lost. With a queue, a dispatch with a retryable failed channel throws so the queue
+     *     retries it (only the unfinished channels send again).
+     *   - `'payload'`: 2.9 behaviour: one key for the whole payload, recorded as soon as ANY
+     *     channel sent (a failed channel beside a successful one is never retried).
+     *
+     * Migration from 2.9: keys in the store now carry a `:<channel>` suffix, so a key written by
+     * 2.9 does not dedupe a redelivery after the upgrade (inside its 24 h TTL). Set `'payload'` to
+     * keep 2.9 keys and semantics.
+     */
+    scope?: 'channel' | 'payload';
   };
   /** Delivery log for audit trail — records every send attempt */
   deliveryLog?: import('./utils/delivery-log.js').DeliveryLog;
@@ -515,7 +531,10 @@ export interface NotificationServiceConfig {
    *     when a dispatch had `sent === 0 && failed > 0`, so the queue
    *     marks the job failed (and retries up to `maxAttempts`). Partial
    *     successes (some channels sent) resolve normally to avoid
-   *     double-sending the channels that already succeeded.
+   *     double-sending the channels that already succeeded, EXCEPT under
+   *     per-channel idempotency (`idempotency.scope: 'channel'`, the 2.10
+   *     default, with a key on the payload): there a retryable failed
+   *     channel also throws, because the re-run skips the sent channels.
    *   - `'always-complete'` — legacy behavior. The processor never
    *     throws; queued jobs always resolve as completed, regardless of
    *     channel outcome. Keep this if your delivery log is the source

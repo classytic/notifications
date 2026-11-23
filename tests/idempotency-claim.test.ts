@@ -111,9 +111,10 @@ describe('NotificationService with a claiming store', () => {
       idempotency: { store, ttl: 86_400_000, leaseMs: 30_000 },
     });
     await service.send(payload('e4'));
+    // 2.10 default: per-channel keys (`${key}:${channel}`).
     expect(calls).toEqual([
-      ['claim', 'e4', 30_000],
-      ['set', 'e4', 86_400_000],
+      ['claim', 'e4:push', 30_000],
+      ['set', 'e4:push', 86_400_000],
     ]);
   });
 
