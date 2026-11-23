@@ -26,6 +26,7 @@ export default defineConfig({
         'src/providers/index.ts',
         'src/providers/email/index.ts',
         'src/utils/index.ts',
+        'src/push/index.ts',
       ],
     },
   },

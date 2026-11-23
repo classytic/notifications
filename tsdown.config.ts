@@ -6,6 +6,9 @@ export default defineConfig({
     'src/channels/index.ts',
     'src/providers/index.ts',
     'src/utils/index.ts',
+    // Mobile push transports (FCM HTTP v1, APNs HTTP/2). A separate entry so `node:http2` and the
+    // provider code never load for hosts that import only the root.
+    'src/push/index.ts',
   ],
   format: 'esm',
   dts: true,

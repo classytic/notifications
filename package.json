@@ -23,13 +23,18 @@
     "./utils": {
       "types": "./dist/utils/index.d.mts",
       "default": "./dist/utils/index.mjs"
+    },
+    "./push": {
+      "types": "./dist/push/index.d.mts",
+      "default": "./dist/push/index.mjs"
     }
   },
   "typesVersions": {
     "*": {
       "channels": ["./dist/channels/index.d.mts"],
       "providers": ["./dist/providers/index.d.mts"],
-      "utils": ["./dist/utils/index.d.mts"]
+      "utils": ["./dist/utils/index.d.mts"],
+      "push": ["./dist/push/index.d.mts"]
     }
   },
   "files": [
