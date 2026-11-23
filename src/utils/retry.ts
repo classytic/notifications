@@ -38,6 +38,21 @@ export function calculateDelay(attempt: number, config: ResolvedRetryConfig): nu
   return Math.max(0, Math.round(delay));
 }
 
+/**
+ * The `retryAfterMs` an error (or one of its causes, up to 4 deep) carries — set by providers
+ * from an HTTP `Retry-After` header. Channels wrap provider errors in `ChannelError`, so the hint
+ * usually rides on `cause`.
+ */
+export function retryAfterHint(error: unknown): number | undefined {
+  let cursor: unknown = error;
+  for (let depth = 0; cursor !== null && typeof cursor === 'object' && depth < 5; depth++) {
+    const hint = (cursor as { retryAfterMs?: unknown }).retryAfterMs;
+    if (typeof hint === 'number' && Number.isFinite(hint) && hint >= 0) return hint;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 /** Sleep for a given duration */
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -69,7 +84,15 @@ export async function withRetry<T>(
 
       if (attempt === config.maxAttempts || shouldRetry?.(lastError) === false) break;
 
-      const delay = calculateDelay(attempt, config);
+      let delay = calculateDelay(attempt, config);
+      // A provider that said WHEN to come back (HTTP `Retry-After`) is obeyed: never retry
+      // sooner than asked. A wait longer than `maxDelay` is not shortened (that is exactly the
+      // hammering Retry-After forbids); the attempt stops here and the caller's queue retries later.
+      const hinted = retryAfterHint(lastError);
+      if (hinted !== undefined) {
+        if (hinted > config.maxDelay) break;
+        delay = Math.max(delay, hinted);
+      }
       onRetry?.(attempt, lastError);
 
       await sleep(delay);

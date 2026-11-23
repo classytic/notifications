@@ -319,29 +319,72 @@ export interface SmsChannelConfig extends ChannelConfig {
 // Push Notification Channel Types
 // ============================================================================
 
+/** The device platform a push token belongs to. */
+export type PushPlatform = 'android' | 'ios' | 'web';
+
+/**
+ * How strongly an iOS notification may interrupt (APNs `aps.interruption-level`). `critical`
+ * needs Apple's critical-alerts entitlement; providers downgrade it unless allowed.
+ */
+export type PushInterruptionLevel = 'passive' | 'active' | 'time-sensitive' | 'critical';
+
+/**
+ * The message a {@link PushProvider} receives. `title` and `body` are always strings; an empty
+ * string means "absent" (a data-only push sets both to `''` and `contentAvailable: true`).
+ *
+ * Every field after `badge` is an optional delivery hint (2.9): a provider that ignores them still
+ * delivers, so existing custom providers keep working unchanged.
+ */
+export interface PushProviderMessage {
+  token: string;
+  title: string;
+  body: string;
+  data?: Record<string, string>;
+  imageUrl?: string;
+  /**
+   * Replace-in-place key: a newer push with the same key replaces the older one on the device
+   * instead of stacking (FCM `android.collapseKey` + `notification.tag`, APNs `apns-collapse-id`,
+   * at most 64 bytes). From `data.collapseKey`. Absent = every push shows on its own.
+   */
+  collapseKey?: string;
+  /** Groups notifications in the tray (APNs `aps.thread-id`, Android group). From `data.threadId`. */
+  threadId?: string;
+  /** App icon badge count (APNs `aps.badge`, Android `notificationCount`). From `data.badge`. */
+  badge?: number;
+  /** The token's platform; `pushRouter` dispatches on it. From `data.platform`. */
+  platform?: PushPlatform;
+  /** Delivery priority. `high` wakes the device (default for visible pushes). From `data.priority`. */
+  priority?: 'high' | 'normal';
+  /** Drop the push if undelivered after this many seconds (`0` = now or never). From `data.ttlSeconds`. */
+  ttlSeconds?: number;
+  /** iOS interruption level. From `data.interruptionLevel`. */
+  interruptionLevel?: PushInterruptionLevel;
+  /**
+   * Data-only / background push: no visible alert, the app wakes and fetches what it needs
+   * (APNs `content-available: 1` + push type `background`; FCM data message). From
+   * `data.contentAvailable` or `data.dataOnly`.
+   */
+  contentAvailable?: boolean;
+  /** Sound name (`'default'` when omitted on a visible push); `null` = silent. From `data.sound`. */
+  sound?: string | null;
+  /** Android notification channel id. From `data.channelId`. */
+  channelId?: string;
+  /** APNs `aps.category` / Android `click_action`. From `data.category`. */
+  category?: string;
+}
+
 /**
  * Push notification provider interface (FCM or custom). Throw to fail the send (retried per
  * the retry config); throw a `PermanentDeliveryError` (or any error with `retryable: false`)
  * for a failure no retry can fix, such as an unregistered device token.
+ *
+ * Built-in providers (FCM HTTP v1, APNs HTTP/2, a platform router) live in
+ * `@classytic/notifications/push`.
  */
 export interface PushProvider {
-  send(message: {
-    token: string;
-    title: string;
-    body: string;
-    data?: Record<string, string>;
-    imageUrl?: string;
-    /**
-     * Replace-in-place key: a newer push with the same key replaces the older one on the device
-     * instead of stacking (FCM `android.collapseKey` + `notification.tag`, APNs `apns-collapse-id`,
-     * at most 64 bytes). From `data.collapseKey`. Absent = every push shows on its own.
-     */
-    collapseKey?: string;
-    /** Groups notifications in the tray (APNs `aps.thread-id`, Android group). From `data.threadId`. */
-    threadId?: string;
-    /** App icon badge count (APNs `aps.badge`, Android `notificationCount`). From `data.badge`. */
-    badge?: number;
-  }): Promise<{ messageId: string }>;
+  send(message: PushProviderMessage): Promise<{ messageId: string }>;
+  /** Release long-lived resources (HTTP/2 sessions). Optional; call on shutdown. */
+  close?(): Promise<void> | void;
 }
 
 /** PushChannel configuration — bring your own push SDK */

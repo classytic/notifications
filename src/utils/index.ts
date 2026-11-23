@@ -4,7 +4,7 @@
  */
 
 export { mergeHooks } from './merge-hooks.js';
-export { withRetry, resolveRetryConfig, calculateDelay } from './retry.js';
+export { withRetry, resolveRetryConfig, calculateDelay, retryAfterHint } from './retry.js';
 export { Emitter } from './emitter.js';
 export { NotificationError, ChannelError, ProviderNotInstalledError } from './errors.js';
 export { PermanentDeliveryError } from './errors.js';

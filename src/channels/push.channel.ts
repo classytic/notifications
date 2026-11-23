@@ -61,7 +61,18 @@
 import { BaseChannel } from './BaseChannel.js';
 import { ChannelError } from '../utils/errors.js';
 import type { NotificationPayload, SendResult } from '../types.js';
-import type { PushChannelConfig, PushProvider } from '../types.js';
+import type { PushChannelConfig, PushInterruptionLevel, PushPlatform, PushProvider } from '../types.js';
+
+const PLATFORMS = new Set<string>(['android', 'ios', 'web']);
+const LEVELS = new Set<string>(['passive', 'active', 'time-sensitive', 'critical']);
+
+/**
+ * A data-only (background) push is opted into explicitly — `data.contentAvailable: true` or
+ * `data.dataOnly: true` — so a send that merely forgot its title is still skipped as before.
+ */
+function isDataOnly(data: Record<string, unknown>): boolean {
+  return data.contentAvailable === true || data.dataOnly === true;
+}
 
 export class PushChannel extends BaseChannel<PushChannelConfig> {
   private provider: PushProvider;
@@ -91,7 +102,7 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
       (payload.data.text as string) ??
       (payload.data.message as string) ??
       '';
-    if (!title && !body) {
+    if (!title && !body && !isDataOnly(payload.data)) {
       return {
         status: 'skipped',
         channel: this.name,
@@ -111,7 +122,8 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
     const title = (data.title as string) ?? (data.subject as string) ?? '';
     const body = (data.body as string) ?? (data.text as string) ?? (data.message as string) ?? '';
 
-    if (!title && !body) {
+    const dataOnly = isDataOnly(data);
+    if (!title && !body && !dataOnly) {
       return { status: 'skipped', channel: this.name, error: 'No title or body (data.title, data.body)' };
     }
 
@@ -120,6 +132,18 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
     const threadId = typeof data.threadId === 'string' && data.threadId ? data.threadId : undefined;
     const badge =
       typeof data.badge === 'number' && Number.isInteger(data.badge) && data.badge >= 0 ? data.badge : undefined;
+    const platform = PLATFORMS.has(data.platform as string) ? (data.platform as PushPlatform) : undefined;
+    const priority = data.priority === 'high' || data.priority === 'normal' ? data.priority : undefined;
+    const ttlSeconds =
+      typeof data.ttlSeconds === 'number' && Number.isInteger(data.ttlSeconds) && data.ttlSeconds >= 0
+        ? data.ttlSeconds
+        : undefined;
+    const interruptionLevel = LEVELS.has(data.interruptionLevel as string)
+      ? (data.interruptionLevel as PushInterruptionLevel)
+      : undefined;
+    const sound = typeof data.sound === 'string' || data.sound === null ? (data.sound as string | null) : undefined;
+    const channelId = typeof data.channelId === 'string' && data.channelId ? data.channelId : undefined;
+    const category = typeof data.category === 'string' && data.category ? data.category : undefined;
 
     try {
       const result = await this.provider.send({
@@ -131,6 +155,14 @@ export class PushChannel extends BaseChannel<PushChannelConfig> {
         ...(collapseKey !== undefined ? { collapseKey } : {}),
         ...(threadId !== undefined ? { threadId } : {}),
         ...(badge !== undefined ? { badge } : {}),
+        ...(platform !== undefined ? { platform } : {}),
+        ...(priority !== undefined ? { priority } : {}),
+        ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+        ...(interruptionLevel !== undefined ? { interruptionLevel } : {}),
+        ...(dataOnly ? { contentAvailable: true } : {}),
+        ...(sound !== undefined ? { sound } : {}),
+        ...(channelId !== undefined ? { channelId } : {}),
+        ...(category !== undefined ? { category } : {}),
       });
 
       return {
