@@ -152,11 +152,12 @@ describe('Retry-After', () => {
     try {
       const fn = vi
         .fn<() => Promise<string>>()
-        .mockRejectedValueOnce(new TransientPushError('fcm', 503, 'UNAVAILABLE', { retryAfterMs: 4000 }))
+        // A Retry-After above the FCM 10 s floor (2.10) wins.
+        .mockRejectedValueOnce(new TransientPushError('fcm', 503, 'UNAVAILABLE', { retryAfterMs: 14_000 }))
         .mockResolvedValueOnce('ok');
-      const config = resolveRetryConfig({ maxAttempts: 2, initialDelay: 10, maxDelay: 10_000 });
+      const config = resolveRetryConfig({ maxAttempts: 2, initialDelay: 10, maxDelay: 20_000 });
       const done = withRetry(fn, config);
-      await vi.advanceTimersByTimeAsync(3999);
+      await vi.advanceTimersByTimeAsync(13_999);
       expect(fn).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(2);
       await expect(done).resolves.toBe('ok');
@@ -270,12 +271,45 @@ describe('NotificationService + PushChannel + fcmProvider (end to end, fake FCM)
     expect(hook).toHaveBeenCalledWith('fcm-token-123456789', 'unregistered');
   });
 
-  it('a transient 503 is retried and then delivered', async () => {
+  it('a transient 503 is NOT retried in-process below the FCM 10 s floor (2.10): left to the queue', async () => {
     fake.sends.length = 0;
     fake.sendScript.push(fcmError(503, 'UNAVAILABLE', 'UNAVAILABLE'));
+    // maxDelay 50 ms < the 10 s floor: one attempt, a retryable failure for the queue.
     const result = await send(service());
-    expect(result.results[0]!.status).toBe('sent');
-    expect(fake.sends).toHaveLength(2);
+    expect(result.results[0]).toMatchObject({ status: 'failed' });
+    expect(result.results[0]!.retryable).not.toBe(false);
+    expect(fake.sends).toHaveLength(1);
+  });
+
+  it('a transient 503 is retried in-process after the 10 s floor when maxDelay allows it', async () => {
+    fake.sends.length = 0;
+    fake.sendScript.push(fcmError(503, 'UNAVAILABLE', 'UNAVAILABLE'));
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const provider = fcmProvider({
+        endpoint: fake.url,
+        credentials: {
+          projectId: 'demo-project',
+          clientEmail: 'push@demo-project.iam.gserviceaccount.com',
+          privateKey: keys.privateKey,
+          tokenUri: fake.tokenUri,
+        },
+      });
+      const svc = new NotificationService({
+        channels: [new PushChannel({ provider })],
+        retry: { maxAttempts: 2, initialDelay: 1, maxDelay: 30_000 },
+      });
+      const done = send(svc);
+      await vi.waitFor(() => expect(fake.sends).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(9_990);
+      expect(fake.sends).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(20);
+      const result = await done;
+      expect(result.results[0]!.status).toBe('sent');
+      expect(fake.sends).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('InvalidPushTokenError is structurally detectable', () => {

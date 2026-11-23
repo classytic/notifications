@@ -63,7 +63,7 @@ export { TelegramChannel } from './channels/telegram.channel.js';
 
 // Utilities
 export { mergeHooks } from './utils/merge-hooks.js';
-export { withRetry, resolveRetryConfig, calculateDelay, retryAfterHint } from './utils/retry.js';
+export { withRetry, resolveRetryConfig, calculateDelay, retryAfterHint, retryFloorHint } from './utils/retry.js';
 export { Emitter } from './utils/emitter.js';
 export { NotificationError, ChannelError, ProviderNotInstalledError } from './utils/errors.js';
 export { PermanentDeliveryError } from './utils/errors.js';

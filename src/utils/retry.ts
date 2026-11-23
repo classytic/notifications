@@ -53,6 +53,20 @@ export function retryAfterHint(error: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * The `retryFloorMs` an error (or one of its causes) carries: the provider's MINIMUM wait before a
+ * retry (push: FCM 10 s, FCM 429 60 s, APNs 5xx 15 min; `TransientPushError` sets it). 2.10.
+ */
+export function retryFloorHint(error: unknown): number | undefined {
+  let cursor: unknown = error;
+  for (let depth = 0; cursor !== null && typeof cursor === 'object' && depth < 5; depth++) {
+    const floor = (cursor as { retryFloorMs?: unknown }).retryFloorMs;
+    if (typeof floor === 'number' && Number.isFinite(floor) && floor >= 0) return floor;
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return undefined;
+}
+
 /** Sleep for a given duration */
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -92,6 +106,14 @@ export async function withRetry<T>(
       if (hinted !== undefined) {
         if (hinted > config.maxDelay) break;
         delay = Math.max(delay, hinted);
+      }
+      // The same rule for a provider's documented minimum (2.10, ADR 0001 section 5.3): FCM's
+      // first retry is at least 10 s, APNs 5xx 15 min. A floor above `maxDelay` stops in-process
+      // retrying; the job queue (arc-notifications' per-device retry job) owns waits that long.
+      const floor = retryFloorHint(lastError);
+      if (floor !== undefined) {
+        if (floor > config.maxDelay) break;
+        delay = Math.max(delay, floor);
       }
       onRetry?.(attempt, lastError);
 

@@ -8,6 +8,7 @@
  */
 
 import { NotificationError, PermanentDeliveryError } from '../utils/errors.js';
+import { pushRetryFloorMs } from './retry.js';
 
 /** Which provider produced an error or event. */
 export type PushProviderName = 'fcm' | 'apns' | 'router';
@@ -86,7 +87,9 @@ export class PushCredentialsError extends PermanentDeliveryError {
 
 /**
  * A transient failure (429, 5xx, timeout, connection reset). Retryable; `retryAfterMs` carries the
- * provider's `Retry-After`, which the service's retry loop honours (`retryAfterHint`).
+ * provider's `Retry-After`, which the service's retry loop honours (`retryAfterHint`), and
+ * `retryFloorMs` the provider's minimum wait (FCM 10 s, FCM 429 60 s, APNs 5xx 15 min, APNs 429 60 s;
+ * `PUSH_RETRY_DEFAULTS`), which nothing may retry sooner than (2.10).
  */
 export class TransientPushError extends NotificationError {
   readonly retryable = true as const;
@@ -95,12 +98,18 @@ export class TransientPushError extends NotificationError {
   readonly status: number;
   readonly reason: string;
   readonly retryAfterMs?: number;
+  /**
+   * The provider's minimum wait before a retry (ms). Defaults from {@link pushRetryFloorMs}
+   * (provider + status); a throw site may pass its own. `withRetry` and `planPushRetry` never
+   * retry sooner.
+   */
+  readonly retryFloorMs: number;
 
   constructor(
     provider: PushProviderName,
     status: number,
     reason: string,
-    options?: { retryAfterMs?: number; cause?: Error },
+    options?: { retryAfterMs?: number; retryFloorMs?: number; cause?: Error },
   ) {
     super(
       `${provider} push failed (retryable): ${status || 'network'} ${reason}` +
@@ -112,6 +121,7 @@ export class TransientPushError extends NotificationError {
     this.status = status;
     this.reason = reason;
     if (options?.retryAfterMs !== undefined) this.retryAfterMs = options.retryAfterMs;
+    this.retryFloorMs = options?.retryFloorMs ?? pushRetryFloorMs(provider, status);
   }
 }
 

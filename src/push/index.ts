@@ -53,6 +53,9 @@ export {
 } from './errors.js';
 export type { InvalidTokenReason, PushProviderName } from './errors.js';
 
+export { PUSH_RETRY_DEFAULTS, planPushRetry, pushRetryDelay, pushRetryFloorMs } from './retry.js';
+export type { PushRetryDecision, PushRetryDelayOptions, PushRetryInput } from './retry.js';
+
 export { tokenSuffix, tokenHash, parseRetryAfter } from './internal.js';
 export type { InvalidTokenHandler, PushDeliveryEvent, PushDeliveryListener } from './internal.js';
 
