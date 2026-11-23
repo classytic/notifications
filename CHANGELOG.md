@@ -2,7 +2,7 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
-## [2.10.0] - 2026-11-23 (unreleased)
+## [2.10.0] - 2026-11-23
 
 Implements gaps G3 and G4 of arc-notifications' `docs/push-gaps-2026-11.md` (ADR 0001 in
 arc-ecosystem, `docs/adr/0001-notifications-and-push.md`).
