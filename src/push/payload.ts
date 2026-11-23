@@ -16,8 +16,11 @@
 import type { PushProvider, PushProviderMessage } from '../types.js';
 import { PushRejectedError } from './errors.js';
 
-/** Opaque id: letters, digits, `_`, `-`, 1 to 64 characters. */
-export const OPAQUE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+/**
+ * Opaque id or enum: letters, digits, `_ - . :`, 1 to 64 characters (`task_offer`,
+ * `order.created`, an ObjectId, a UUID). No spaces, so no sentence or name fits.
+ */
+export const OPAQUE_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
 
 export interface ContentFreeOptions {
   /** Data keys a push may carry besides `type` (ids and enums, never personal data). */
