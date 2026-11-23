@@ -22,7 +22,9 @@ metadata:
 | Credential form fields for an email provider | `getEmailCredentialSchema` |
 | "Test connection" for an email credential | `testEmailCredential` |
 | From header with display name | `buildFromHeader` |
-| SMS or push through Twilio, FCM, Expo | `SmsChannel`, `PushChannel` with a provider object |
+| SMS or push through your SDK | `SmsChannel`, `PushChannel` with a provider object |
+| Android / iOS push without an SDK | `fcmProvider`, `apnsProvider`, `pushRouter` (`/push`) |
+| Delete dead device tokens | `onInvalidToken`, `InvalidPushTokenError` (`/push`) |
 | Webhook with HMAC signature | `WebhookChannel` |
 | Telegram bot message | `TelegramChannel` |
 | Custom channel | extend `BaseChannel` |
@@ -100,5 +102,6 @@ class SlackChannel extends BaseChannel<SlackConfig> {
 ## References
 
 - `references/channels-providers.md`: read for each channel's config and payload fields, provider interfaces, email presets, webhooks.
+- `references/push.md`: read for FCM / APNs credentials, error mapping, content-free pushes.
 - `references/service-features.md`: read for batch, preferences, quiet hours, hooks, queue, idempotency, lifecycle events, delivery log, status webhooks.
 - Rule-driven notifications, in-app feed and approval inbox: skill `arc-notifications`.

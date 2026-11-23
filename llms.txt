@@ -10,6 +10,7 @@ Rule engines, in-app feeds and approval inboxes are in skill arc-notifications.
 | Email from stored credentials (Resend, Gmail, SendGrid, Mailgun, SES, SMTP) | `buildEmailTransport` from `@classytic/notifications/providers` |
 | Credential form fields and connection test | `getEmailCredentialSchema`, `testEmailCredential` |
 | SMS or push | `SmsChannel`, `PushChannel` with your provider object |
+| Android / iOS push without an SDK | `fcmProvider`, `apnsProvider`, `pushRouter` from `@classytic/notifications/push` |
 | Signed webhook | `WebhookChannel` |
 | Telegram message | `TelegramChannel` |
 | New channel type | `BaseChannel` |

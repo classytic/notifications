@@ -1,1 +1,1 @@
-["retry","idempotencyKey","rateLimit","deliveryLog","queue","delay","preferences","sendBatch","send"]
+["retry","idempotencyKey","rateLimit","deliveryLog","queue","delay","preferences","sendBatch","send","onInvalidToken"]

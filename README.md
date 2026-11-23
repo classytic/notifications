@@ -314,6 +314,65 @@ const expoPush = new PushChannel({
 });
 ```
 
+### Built-in push transports (`/push`): FCM HTTP v1 and APNs, no SDK
+
+`@classytic/notifications/push` ships production push providers on node built-ins only
+(`node:crypto`, `node:http2`, `fetch`): no `firebase-admin`, no `apn`. Each is a plain `PushProvider`,
+so it drops into `PushChannel`.
+
+```typescript
+import { PushChannel } from '@classytic/notifications/channels';
+import { apnsProvider, fcmProvider, pushRouter } from '@classytic/notifications/push';
+
+const dropToken = (token: string) => devices.deleteOne({ token });
+
+const push = new PushChannel({
+  provider: pushRouter({
+    // Credentials are a value or a FUNCTION, re-read per send: rotate without restarting.
+    android: fcmProvider({ credentials: () => vault.fcm(), onInvalidToken: dropToken }),
+    ios: apnsProvider({
+      credentials: () => vault.apns(), // { keyId, teamId, privateKey (.p8), bundleId, environment }
+      onInvalidToken: dropToken,
+      allowCriticalAlerts: false,      // true only if the iOS build has Apple's critical-alerts entitlement
+    }),
+  }),
+});
+
+await service.send({
+  event: 'task.offered',
+  recipient: { id: userId, deviceToken },
+  data: {
+    title: 'New task',
+    platform: 'ios',               // pushRouter dispatches on it
+    pushData: { type: 'task_offer', offerId: 'o_1' },
+    collapseKey: 'offer-o_1',
+    interruptionLevel: 'time-sensitive',
+    ttlSeconds: 300,
+  },
+});
+```
+
+| Provider answer | Result | Retried |
+|---|---|---|
+| FCM `UNREGISTERED`, `INVALID_ARGUMENT` naming the token; APNs 410, `BadDeviceToken` | `InvalidPushTokenError` + `onInvalidToken(token, reason)` | no |
+| Payload / topic / sender problems, a platform without a provider | `PushRejectedError` (device kept) | no |
+| Credentials missing, malformed, or refused after one refresh | `PushCredentialsError` | no |
+| 429, 5xx, timeout, network | `TransientPushError` with `retryAfterMs` | yes, never sooner than `Retry-After` |
+
+- **Tokens**: FCM OAuth2 access tokens are cached until 60 s before expiry with one shared refresh
+  for concurrent sends; APNs ES256 provider tokens are reused for 50 minutes (Apple allows 20 to 60).
+- **Connections**: one HTTP/2 session per APNs host, reused, reopened after GOAWAY; it never holds
+  the process open while idle. `close()` ends it on shutdown.
+- **Data-only pushes**: `data.contentAvailable: true` (or `dataOnly: true`) with no title/body sends a
+  background push. `createContentFreeBuilder` / `contentFreeOnly` keep pushes to a type and opaque ids
+  for apps whose data may not leave a jurisdiction.
+- **Observability**: `onDelivery(event)` gets one redacted record per send (token suffix and hash,
+  status, reason, latency; never the token or the text).
+- `withRetry` (and so the service) now honours `retryAfterMs` on an error or its `cause`.
+
+Arc apps: `@classytic/arc-notifications/push` adds device registration, credentials from env or an
+encrypted admin integration, and a device fan-out channel on top of these providers.
+
 ### WebhookChannel
 
 Zero dependencies — uses native `fetch`.
@@ -760,6 +819,18 @@ import {
   withRetry, Emitter, isQuietHours,
   NotificationError, ChannelError, ProviderNotInstalledError,
 } from '@classytic/notifications/utils';
+
+// Push transports (FCM HTTP v1, APNs HTTP/2), zero dependencies
+import {
+  fcmProvider, apnsProvider, pushRouter,
+  createContentFreeBuilder, contentFreeOnly,
+  parseFcmServiceAccount, validateFcmCredentials, validateApnsCredentials,
+  InvalidPushTokenError, PushRejectedError, PushCredentialsError, TransientPushError,
+  isInvalidPushTokenError, tokenSuffix, tokenHash,
+} from '@classytic/notifications/push';
+import type {
+  FcmCredentials, ApnsCredentials, CredentialsSource, PushDeliveryEvent, InvalidTokenReason,
+} from '@classytic/notifications/push';
 
 // Types
 import type {

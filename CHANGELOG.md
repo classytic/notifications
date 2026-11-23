@@ -2,6 +2,57 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [Unreleased] (suggested 2.9.0, minor: additive only)
+
+### Added: `@classytic/notifications/push`, FCM HTTP v1 and APNs HTTP/2 with no SDK
+
+Generalised from the push stack of a production incident-management app (FCM through
+`firebase-admin` there; here straight HTTP v1). Node built-ins only (`node:crypto`, `node:http2`,
+`fetch`), so the "zero required dependencies" promise holds. A new subpath and tsdown entry: the root
+entry never loads `node:http2`.
+
+- `fcmProvider(options)`: service-account JWT (RS256) exchanged for an OAuth2 access token, cached
+  until 60 s before expiry, ONE shared refresh for concurrent sends; a 401 refreshes and retries once.
+- `apnsProvider(options)`: ES256 provider token reused for `tokenTtlMs` (default 50 min, validated to
+  Apple's 20 to 60 min window), one HTTP/2 session per host reused and reopened after GOAWAY / close /
+  error, ref'd only while streams are in flight; sandbox / production host from
+  `credentials.environment`; `apns-push-type`, `apns-priority`, `apns-topic`, `apns-expiration`,
+  `apns-collapse-id`; interruption levels with `critical` only when `allowCriticalAlerts`.
+- `pushRouter({ android, ios, web, defaultPlatform })`: dispatch on `message.platform`; a platform
+  with no provider is a `PushRejectedError` (`platform-disabled`), never a dead token.
+- Dead tokens: FCM `UNREGISTERED` / `INVALID_ARGUMENT` naming the token and APNs 410 /
+  `BadDeviceToken` throw `InvalidPushTokenError` (`reason`) after calling `onInvalidToken(token, reason)`.
+  `SENDER_ID_MISMATCH` and `DeviceTokenNotForTopic` are `PushRejectedError` and keep the device (a
+  configuration mix-up must not wipe every device row).
+- Transient errors (429, 5xx, timeout, network) are `TransientPushError` with `retryAfterMs` from
+  `Retry-After`; a provider-wide 429 / 503 with `Retry-After` pauses that provider instance (fails fast)
+  until the time passes; a per-device 429 does not.
+- `PushCredentialsError` for missing / malformed / refused credentials, naming fields only.
+- Credentials as a value or a function (`CredentialsSource`), re-resolved per send; a changed `version`
+  (or field fingerprint) re-imports the key and drops cached tokens. `parseFcmServiceAccount`,
+  `validateFcmCredentials`, `validateApnsCredentials`.
+- Content-free pushes: `createContentFreeBuilder` and the `contentFreeOnly` provider guard.
+- `onDelivery` structured events (`PushDeliveryEvent`): token suffix + hash, status, reason, latency.
+- `maxConcurrency` per provider instance (FCM 100, APNs 500 by default).
+
+### Added: delivery hints and data-only pushes on the root `PushProvider`
+
+- `PushProviderMessage` (named, exported) gains optional `platform`, `priority`, `ttlSeconds`,
+  `interruptionLevel`, `contentAvailable`, `sound`, `channelId`, `category`; `PushProvider` gains an
+  optional `close()`. `PushChannel` forwards each from `payload.data`.
+- `PushChannel` sends a data-only push (no title, no body) only when `data.contentAvailable` or
+  `data.dataOnly` is `true`; without the flag such a send is still skipped, as before.
+
+### Added: `Retry-After` in `withRetry`
+
+`withRetry` (and so `NotificationService`) waits at least an error's `retryAfterMs` (found on the error
+or its `cause` chain, `retryAfterHint`); a hint above `maxDelay` stops retrying instead of shortening the
+wait. Errors without the field back off exactly as before.
+
+Pinned by `tests/push-fcm.test.ts`, `tests/push-apns.test.ts` (local fake FCM over HTTP and APNs over
+h2c, generated keys, no network), `tests/push-router-payload.test.ts`, `tests/types/push-contract.ts`.
+Design notes: `DESIGN.md`.
+
 ## [2.8.0] — 2026-11-09
 
 ### Added: custom SMTP without authentication, and `requireTLS`
