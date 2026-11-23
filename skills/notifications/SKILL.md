@@ -85,7 +85,7 @@ class SlackChannel extends BaseChannel<SlackConfig> {
 - `send` never throws for delivery failures; read `result.failed` and `result.results[].error`. `before:send` listeners that throw DO abort the send.
 - Skips (idempotent duplicate, opt-out, quiet hours, rate limit, channel not matching `events`) count in `skipped`, not `failed`.
 - With a `queue`, `send` returns `{ queued: true }` at once; `delay` needs a queue and is ignored without one.
-- Idempotency stores with `claim`/`release` (memory, Redis) give atomic dedup; success keeps the key for `ttl` (24 h), zero sent releases it.
+- Idempotency stores with `claim`/`release` (memory, Redis) give atomic dedup; since 2.10 keys are per channel (`key:channel`, kept for `ttl` only for channels that sent), so a failed channel is retried alone.
 - Retry applies per channel; results with `retryable: false` stop after one attempt.
 - Push `data` values must be strings; `collapseKey`, `threadId`, `badge` ride in `payload.data`.
 - `EmailChannel.defaults` cannot override `to`, `from`, `subject`, body, `cc`, `bcc`, attachments (misdirection guard); set `allowSenderOverride` to let a payload choose `from`.

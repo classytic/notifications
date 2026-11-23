@@ -357,7 +357,16 @@ await service.send({
 | FCM `UNREGISTERED`, `INVALID_ARGUMENT` naming the token; APNs 410, `BadDeviceToken` | `InvalidPushTokenError` + `onInvalidToken(token, reason)` | no |
 | Payload / topic / sender problems, a platform without a provider | `PushRejectedError` (device kept) | no |
 | Credentials missing, malformed, or refused after one refresh | `PushCredentialsError` | no |
-| 429, 5xx, timeout, network | `TransientPushError` with `retryAfterMs` | yes, never sooner than `Retry-After` |
+| 429, 5xx, timeout, network | `TransientPushError` with `retryAfterMs` and `retryFloorMs` | yes, never sooner than `Retry-After` or the provider floor |
+
+**Retry timing (2.10).** Every `TransientPushError` carries `retryFloorMs`, the provider's documented
+minimum: FCM 10 s (60 s on 429), APNs 15 min on 5xx and 60 s on 429, 10 s for network errors
+(`PUSH_RETRY_DEFAULTS`). `pushRetryDelay(err, attempt)` is `max(Retry-After, floor) x 2^(attempt-1)`
+with upward-only jitter; `planPushRetry({ error, attempt, firstFailureAt, now, expiresAt })` adds at
+most 5 attempts, FCM's 60 min give-up window and the notification's expiry, and returns
+`{ retry: true, delayMs }` or `{ retry: false, reason }`. Both are pure: schedule the next attempt on
+your job queue (arc-notifications' `push.device` job does). `withRetry` never retries sooner than a
+floor, and stops in process when the floor exceeds `maxDelay`.
 
 - **Tokens**: FCM OAuth2 access tokens are cached until 60 s before expiry with one shared refresh
   for concurrent sends; APNs ES256 provider tokens are reused for 50 minutes (Apple allows 20 to 60).
@@ -368,7 +377,7 @@ await service.send({
   for apps whose data may not leave a jurisdiction.
 - **Observability**: `onDelivery(event)` gets one redacted record per send (token suffix and hash,
   status, reason, latency; never the token or the text).
-- `withRetry` (and so the service) now honours `retryAfterMs` on an error or its `cause`.
+- `withRetry` (and so the service) honours `retryAfterMs` and `retryFloorMs` on an error or its `cause`.
 
 Arc apps: `@classytic/arc-notifications/push` adds device registration, credentials from env or an
 encrypted admin integration, and a device fan-out channel on top of these providers.
@@ -711,6 +720,19 @@ A custom `IdempotencyStore` gets the same guarantee by implementing the optional
 `claim(key, leaseMs)` / `release(key)` pair; stores with only `has` / `set` keep the
 previous check-then-record behaviour (fine in one process, racy across several).
 
+**Per-channel keys (2.10 default).** The key is claimed and recorded per channel as
+`${idempotencyKey}:${channel}`, and recorded only for channels that sent. With
+`channels: ['in-app', 'push']`, an in-app write that succeeded beside a push that failed
+leaves `key:push` free: a redelivery (or the queue's retry) sends the push and skips the
+in-app channel (`skipped`, error `duplicate (idempotency)`). With a queue, a dispatch with a
+retryable failed channel now throws so the queue re-runs it; without a key the old "partial
+success completes" rule stays. `idempotency: { scope: 'payload' }` restores the 2.9
+single key (a failed channel beside a successful one is then never retried).
+
+Upgrading from 2.9: keys written by 2.9 have no `:<channel>` suffix, so an event redelivered
+within 24 h of the upgrade is not recognised as a duplicate. Deploy outside a redelivery
+window, or keep `scope: 'payload'` until old keys have expired.
+
 ## Batch Sending
 
 Send thousands of notifications with controlled concurrency:
@@ -738,6 +760,9 @@ const notifications = new NotificationService({
 ```
 
 Jitter (+-25%) is applied automatically to prevent thundering herd. Per-channel overrides are supported.
+An error that carries `retryAfterMs` (HTTP `Retry-After`) or `retryFloorMs` (a provider's minimum, set
+on every push `TransientPushError`) is never retried sooner; when that wait exceeds `maxDelay` the
+in-process loop stops and the failure is left to your queue.
 
 ## Lifecycle Events
 

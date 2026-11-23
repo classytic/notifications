@@ -40,9 +40,11 @@ const push = new PushChannel({ provider });
 | `InvalidPushTokenError` (`reason`: `unregistered`, `invalid-token`, `bad-device-token`) | FCM UNREGISTERED / INVALID_ARGUMENT naming the token; APNs 410, BadDeviceToken. `onInvalidToken(token, reason)` runs first | no |
 | `PushRejectedError` | payload rejected, SENDER_ID_MISMATCH, DeviceTokenNotForTopic, platform with no provider | no |
 | `PushCredentialsError` | credentials missing, malformed, or refused twice | no |
-| `TransientPushError` (`retryAfterMs`) | 429, 5xx, timeout, network | yes, never sooner than `Retry-After` |
+| `TransientPushError` (`retryAfterMs`, `retryFloorMs`) | 429, 5xx, timeout, network | yes, never sooner than `Retry-After` or the floor |
 
 A provider-wide 429 / 503 with `Retry-After` pauses that provider instance until the time passes (fails fast meanwhile). A per-device 429 does not.
+
+Retry timing (2.10): floors FCM 10 s (429: 60 s), APNs 5xx 15 min, APNs 429 60 s, network 10 s (`PUSH_RETRY_DEFAULTS`). Schedule retries on a queue with `planPushRetry({ error, attempt, firstFailureAt, now, expiresAt })` (5 attempts, FCM 60 min window, never past expiry; jitter only adds). Never sleep in process for push retries.
 
 ## Content-free pushes
 

@@ -2,6 +2,44 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
+## [2.10.0] - 2026-11-23 (unreleased)
+
+Implements gaps G3 and G4 of arc-notifications' `docs/push-gaps-2026-11.md` (ADR 0001 in
+arc-ecosystem, `docs/adr/0001-notifications-and-push.md`).
+
+### Added: provider retry floors and retry planning (G4)
+
+- `TransientPushError.retryFloorMs`: the provider's documented minimum wait, filled by the constructor
+  from `pushRetryFloorMs(provider, status)`: FCM 10 s (5xx, network, timeout), FCM 429 60 s, APNs 5xx
+  15 min, APNs 429 60 s, network / unknown 10 s. Throw sites may pass their own.
+- `PUSH_RETRY_DEFAULTS`, `pushRetryDelay(err, attempt)` (`max(Retry-After, floor) x 2^(n-1)`, growth
+  capped at 60 min, 0 to 20 % jitter that only adds), `planPushRetry({ error, attempt, firstFailureAt,
+  now, expiresAt?, maxAttempts? = 5, giveUpAfterMs? })` returning `{ retry: true, delayMs, at }` or
+  `{ retry: false, reason: 'permanent' | 'attempts' | 'expired' | 'gave-up' }` (FCM: 60 min window).
+  Pure functions: nothing sleeps; schedule the next attempt on a job queue.
+- `retryFloorHint(err)` (root and `/utils`), the floor counterpart of `retryAfterHint`.
+
+### Added: per-channel idempotency (G3)
+
+- `idempotency.scope: 'channel' | 'payload'`. `'channel'` (new default) claims and records
+  `${idempotencyKey}:${channel.name}` per channel, only for channels that sent; a redelivery skips the
+  done channels (`skipped`, `duplicate (idempotency)`) and retries the rest. A fully duplicated payload
+  keeps the 2.9 shape (`results: []`, `skipped: 1`). With a queue (`throw-on-total-failure`), a
+  dispatch with a retryable failed channel now throws so the queue re-runs it; only the unfinished
+  channels send. `'payload'` is the 2.9 behaviour.
+
+### Changed (migration)
+
+- **Idempotency keys** now carry a `:<channel>` suffix by default. A key written by 2.9 does not
+  dedupe an event redelivered within its 24 h TTL after the upgrade. Deploy outside a redelivery
+  window, or set `idempotency: { scope: 'payload' }` and switch later. Code that reads the store by
+  key must append `:<channel>`.
+- **`withRetry` honours `retryFloorMs`** like `Retry-After`: a push `TransientPushError` is never
+  retried in process sooner than its floor, and not in process at all when the floor exceeds
+  `maxDelay` (default 30 s; so APNs 5xx always goes to the queue). An FCM 5xx through `PushChannel`
+  with the default retry config now waits 10 s instead of about 0.5 s. Custom errors without the field
+  are unaffected.
+
 ## [2.9.0] - 2026-11-23
 
 ### Added: `@classytic/notifications/push`, FCM HTTP v1 and APNs HTTP/2 with no SDK

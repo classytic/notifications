@@ -21,6 +21,7 @@ const out = await service.sendBatch(payloads, { concurrency: 10, onProgress: ({ 
 `idempotencyKey` on the payload. Default `MemoryIdempotencyStore` (single process). Use `RedisIdempotencyStore({ client, prefix })` across processes; `client` is any structural `RedisIdempotencyClient` (ioredis fits).
 Stores implementing `claim(key, leaseMs)` and `release(key)` give atomic dedup; the lease (`leaseMs`, default 5 minutes) bounds how long a crashed sender holds a key. Success keeps the key for `ttl` (default 24 h); zero sent or a thrown error releases it.
 Stores with only `has`/`set` still work but are check-then-act.
+2.10: keys are per channel by default (`idempotency.scope: 'channel'`, stored as `${key}:${channel}`, recorded only for channels that SENT): a redelivery skips done channels and retries failed ones, so a failed push beside a sent in-app row is not lost. With a queue a retryable failed channel re-runs the job. `scope: 'payload'` = 2.9 single key.
 
 ## Rate limiting
 
@@ -48,6 +49,7 @@ Opt-outs and quiet hours skip delivery; `isQuietHours({ start, end, timezone })`
 ## Retry
 
 `retry: { maxAttempts, backoff: 'exponential' | 'linear' | 'fixed', initialDelay, maxDelay }`, jitter of 25 percent. Per-channel `retry` overrides. Default is one attempt. `send:retry` fires per retry.
+An error's `retryAfterMs` / `retryFloorMs` (push provider minimum) is never undercut; above `maxDelay` the in-process loop stops and the queue owns the retry.
 
 ## Templates
 

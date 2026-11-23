@@ -58,6 +58,19 @@ service makes one attempt.
   `retryAfterMs`. `withRetry` now waits at least that long; when the hint exceeds `maxDelay` it stops
   instead of shortening the wait, leaving the retry to the host's queue. Hammering a provider that said
   "not before T" is exactly what the header forbids.
+- **Provider floors (2.10, ADR 0001 section 5.3 in arc-ecosystem)**: every `TransientPushError` carries
+  `retryFloorMs` from one table (`PUSH_RETRY_DEFAULTS`, `pushRetryFloorMs`): FCM 10 s for 5xx /
+  network ("first retry at least 10 s", Scale FCM), FCM 429 60 s ("Retry-After, else 60 s"; ErrorCode:
+  1 minute initial delay for quota), APNs 5xx 15 min ("After 15 minutes, you can retry"), APNs 429 60 s
+  (our value), network / unknown 10 s (our value). The constructor fills it, so every throw site (and
+  any future one) gets it; a site may override. `withRetry` treats it like `Retry-After`.
+- **Scheduling, not sleeping**: `pushRetryDelay` = `max(Retry-After, floor) x 2^(n-1)`, capped at 60 min
+  of growth (a floor above the cap still wins), plus 0 to 20 % jitter that only ADDS, so no jittered
+  value undercuts a provider minimum. `planPushRetry` stops on a permanent error, after 5 attempts,
+  past FCM's 60 min continuous-failure window, or when the next attempt would land at or after the
+  notification's `expiresAt`. Both are pure; the caller enqueues the next attempt
+  (arc-notifications' `push.device` job). In-process sleeps were rejected in ADR 0001 section 13: they
+  hold a worker for minutes and cannot honour 15 min floors.
 - **Cool-down, not a circuit breaker.** After a provider-wide 429 or a 5xx that carried `Retry-After`,
   the provider instance fails fast (retryable, with the remaining wait) until the deadline, without a
   network call. A per-device 429 (FCM "Device message rate exceeded", APNs `TooManyRequests`) does not
@@ -70,7 +83,11 @@ service makes one attempt.
   per-recipient limit on top.
 - **Idempotency**: neither provider is idempotent on the wire. At-least-once event delivery is made
   safe one level up: the service's `idempotencyKey` (atomic claim in `RedisIdempotencyStore` across
-  processes), suffixed per recipient by arc-notifications' triggers.
+  processes), suffixed per recipient by arc-notifications' triggers, and (2.10) per channel:
+  `${key}:${channel}` is claimed before the template renders and recorded only for channels that
+  sent, so a failed push beside a delivered in-app row is retried and the in-app row is not written
+  twice. 2.9 recorded the whole payload key as soon as any channel sent (`scope: 'payload'` keeps
+  that). Per DEVICE deduplication is arc-notifications' (`push:<org>:<key>:<user>:<deviceKey>`).
 - **Timeouts**: 10 s per HTTP call (FCM: `AbortSignal.timeout`; APNs: stream timeout + cancel). A
   timeout is transient.
 
@@ -114,6 +131,16 @@ service makes one attempt.
 - `withRetry` changes only for errors that carry `retryAfterMs` (no previous error did).
 - Everything else is behind the new `./push` subpath. Suggested version: **2.9.0 (minor)**. Not
   published.
+
+### 2.10 (unreleased)
+
+- Additive: `TransientPushError.retryFloorMs`, `retryFloorHint`, `PUSH_RETRY_DEFAULTS`,
+  `pushRetryFloorMs`, `pushRetryDelay`, `planPushRetry`, `idempotency.scope`.
+- Behaviour changes, both toward the providers' and the ADR's rules: (1) per-channel idempotency is
+  the default (keys gain a `:<channel>` suffix; a 2.9 key does not dedupe a post-upgrade redelivery;
+  with a queue, a retryable failed channel beside a sent one now re-runs the job); (2) `withRetry`
+  waits at least a push error's floor, so an FCM 5xx is retried in process after 10 s instead of
+  0.5 s, and not at all in process when `maxDelay` is below the floor.
 
 ## 7. What changed from the source app
 
