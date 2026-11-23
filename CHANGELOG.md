@@ -2,7 +2,7 @@
 
 All notable changes to `@classytic/notifications` will be documented in this file.
 
-## [Unreleased] (suggested 2.9.0, minor: additive only)
+## [2.9.0] - 2026-11-23
 
 ### Added: `@classytic/notifications/push`, FCM HTTP v1 and APNs HTTP/2 with no SDK
 
